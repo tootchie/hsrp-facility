@@ -21,9 +21,9 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import altair as alt          # type: ignore # comes installed with streamlit
-import pandas as pd # type: ignore
-import streamlit as st # type: ignore
+import altair as alt          # comes installed with streamlit
+import pandas as pd
+import streamlit as st
 
 BASE_DIR = Path(__file__).parent
 DB_FILE = BASE_DIR / "facilities.db"
@@ -195,7 +195,7 @@ html, body, [class*="css"] { font-family: Verdana, "Segoe UI", sans-serif; }
 .app-header { background: var(--green); color: #fff; padding: 12px 24px;
   border-radius: 8px; display: flex; align-items: center; gap: 18px;
   position: relative; margin-bottom: 16px; }
-.app-header .logos { display: flex; align-items: center; gap: 0px; flex: 0 0 auto; }
+.app-header .logos { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .app-header .brand { min-width: 0; }
 .app-header img { height: 72px; width: auto; }
 .app-header .small { font-size: .8rem; }
@@ -306,7 +306,7 @@ def render_dashboard(df):
     systems = set(df["EMR System"])
     emr_options = sorted(systems - {"No EMR"}, key=str.lower) + (["No EMR"] if "No EMR" in systems else [])
     st.markdown('<div class="panel-head">Filter Facilities</div>', unsafe_allow_html=True)
-    if True:
+    with st.container(border=True):
         f1, f2, f3, f4 = st.columns(4)
         sel_prov = f1.multiselect("Province", PROVINCES, placeholder="All provinces")
         sel_type = f2.multiselect("Facility Type", FACILITY_TYPES, placeholder="All types")

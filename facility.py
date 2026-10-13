@@ -507,6 +507,35 @@ def match_province(text):
     return _PROV_BY_LOWER.get(t) or detect_province(t)
 
 
+# ---------- Security / Login ----------
+def check_password():
+    """Returns True if user is logged in, otherwise shows a login box and stops execution."""
+    if st.session_state.get("authenticated", False):
+        return True
+
+    render_header("Login")
+    _, center_col, _ = st.columns([1, 1.3, 1])
+    with center_col:
+        with st.container(border=True):
+            st.markdown("### 🔒 Authorized Access Only")
+            st.caption("Health System Resilience Project (HSRP)")
+            user = st.text_input("Username", key="login_user")
+            pwd = st.text_input("Password", type="password", key="login_pwd")
+            login_btn = st.button("Log In", type="primary", use_container_width=True)
+
+            if login_btn:
+                # Default credentials (can be configured in Streamlit Secrets if deployed)
+                valid_user = st.secrets.get("AUTH_USER", "admin") if hasattr(st, "secrets") and "AUTH_USER" in st.secrets else "admin"
+                valid_pwd = st.secrets.get("AUTH_PASSWORD", "hsrp2026") if hasattr(st, "secrets") and "AUTH_PASSWORD" in st.secrets else "hsrp2026"
+
+                if user.strip() == valid_user and pwd == valid_pwd:
+                    st.session_state["authenticated"] = True
+                    st.rerun()
+                else:
+                    st.error("Maling username o password. Pakisubukang muli.")
+    return False
+
+
 # ---------- App ----------
 _icon = find_logo("logo")
 st.set_page_config(
@@ -516,6 +545,15 @@ st.set_page_config(
 )
 st.markdown(CSS, unsafe_allow_html=True)
 init_db()
+
+if not check_password():
+    st.stop()
+
+# Logout button sa ilalim ng sidebar
+with st.sidebar:
+    if st.button("🚪 Log out", use_container_width=True):
+        st.session_state["authenticated"] = False
+        st.rerun()
 
 page = st.sidebar.radio(
     "Menu", ["Dashboard", "View / Search", "Add Facility", "Edit / Delete", "Find Duplicates", "Import / Export"]

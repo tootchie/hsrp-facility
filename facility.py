@@ -1,7 +1,7 @@
 """
 HSRP Facility Management App (CRUD + Dashboard)
 Health System Resilience Project - Department of Health
-Columns: Province | Name of Facility | Facility Type | Address | EMR | Accredited YAKAP with GAMOT | Accredited GAMOT package provider?
+Columns: Province | Name of Facility | Facility Type | Address | EMR
 
 Run:
     python -m pip install streamlit pandas
@@ -119,9 +119,12 @@ SHEET_HEADERS = [
 @st.cache_resource
 def get_gspread_client():
     if hasattr(st, "secrets") and "gcp_service_account" in st.secrets:
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
-        return gspread.authorize(creds)
+        try:
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
+            return gspread.authorize(creds)
+        except Exception:
+            return None
     return None
 
 
@@ -129,16 +132,23 @@ def get_worksheet():
     client = get_gspread_client()
     if not client:
         return None
-    url = st.secrets.get("general", {}).get("SPREADSHEET_URL") or st.secrets.get("SPREADSHEET_URL")
-    if not url:
+    try:
+        url = None
+        if hasattr(st, "secrets"):
+            if "general" in st.secrets and "SPREADSHEET_URL" in st.secrets["general"]:
+                url = st.secrets["general"]["SPREADSHEET_URL"]
+            elif "SPREADSHEET_URL" in st.secrets:
+                url = st.secrets["SPREADSHEET_URL"]
+        if not url:
+            return None
+        sheet = client.open_by_url(url)
+        ws = sheet.sheet1
+        first_row = ws.row_values(1)
+        if not first_row:
+            ws.append_row(SHEET_HEADERS)
+        return ws
+    except Exception:
         return None
-    sheet = client.open_by_url(url)
-    ws = sheet.sheet1
-    # Check headers
-    first_row = ws.row_values(1)
-    if not first_row:
-        ws.append_row(SHEET_HEADERS)
-    return ws
 
 
 def get_conn():
@@ -148,7 +158,7 @@ def get_conn():
 def init_db():
     ws = get_worksheet()
     if ws is not None:
-        return  # Managed by Google Sheet
+        return
 
     with get_conn() as conn:
         conn.execute(
@@ -178,15 +188,18 @@ def init_db():
 def read_facilities():
     ws = get_worksheet()
     if ws is not None:
-        records = ws.get_all_records()
-        if not records:
-            return pd.DataFrame(columns=SHEET_HEADERS)
-        df = pd.DataFrame(records)
-        for h in SHEET_HEADERS:
-            if h not in df.columns:
-                df[h] = ""
-        df["ID"] = pd.to_numeric(df["ID"], errors="coerce").fillna(0).astype(int)
-        return df.sort_values(by=["Province", "Name of Facility"], key=lambda col: col.str.lower())
+        try:
+            records = ws.get_all_records()
+            if not records:
+                return pd.DataFrame(columns=SHEET_HEADERS)
+            df = pd.DataFrame(records)
+            for h in SHEET_HEADERS:
+                if h not in df.columns:
+                    df[h] = ""
+            df["ID"] = pd.to_numeric(df["ID"], errors="coerce").fillna(0).astype(int)
+            return df.sort_values(by=["Province", "Name of Facility"], key=lambda col: col.astype(str).str.lower())
+        except Exception:
+            pass
 
     with get_conn() as conn:
         return pd.read_sql_query(
@@ -203,11 +216,14 @@ def read_facilities():
 def create_facility(province, name, ftype, address, emr, yakap="", gamot="", ownership=""):
     ws = get_worksheet()
     if ws is not None:
-        df = read_facilities()
-        next_id = int(df["ID"].max() + 1) if not df.empty and df["ID"].max() > 0 else 1
-        row = [next_id, province, name, ftype, address, emr, yakap, gamot, ownership]
-        ws.append_row(row)
-        return
+        try:
+            df = read_facilities()
+            next_id = int(df["ID"].max() + 1) if not df.empty and df["ID"].max() > 0 else 1
+            row = [next_id, province, name, ftype, address, emr, yakap, gamot, ownership]
+            ws.append_row(row)
+            return
+        except Exception:
+            pass
 
     with get_conn() as conn:
         conn.execute(
@@ -220,11 +236,14 @@ def create_facility(province, name, ftype, address, emr, yakap="", gamot="", own
 def update_facility(fid, province, name, ftype, address, emr, yakap="", gamot="", ownership=""):
     ws = get_worksheet()
     if ws is not None:
-        cell = ws.find(str(fid), in_column=1)
-        if cell:
-            row_num = cell.row
-            ws.update(f"A{row_num}:I{row_num}", [[fid, province, name, ftype, address, emr, yakap, gamot, ownership]])
-        return
+        try:
+            cell = ws.find(str(fid), in_column=1)
+            if cell:
+                row_num = cell.row
+                ws.update(values=[[fid, province, name, ftype, address, emr, yakap, gamot, ownership]], range_name=f"A{row_num}:I{row_num}")
+            return
+        except Exception:
+            pass
 
     with get_conn() as conn:
         conn.execute(
@@ -237,10 +256,13 @@ def update_facility(fid, province, name, ftype, address, emr, yakap="", gamot=""
 def delete_facility(fid):
     ws = get_worksheet()
     if ws is not None:
-        cell = ws.find(str(fid), in_column=1)
-        if cell:
-            ws.delete_rows(cell.row)
-        return
+        try:
+            cell = ws.find(str(fid), in_column=1)
+            if cell:
+                ws.delete_rows(cell.row)
+            return
+        except Exception:
+            pass
 
     with get_conn() as conn:
         conn.execute("DELETE FROM facilities WHERE id=?", (fid,))
@@ -260,12 +282,338 @@ def delete_many(ids):
 def delete_all():
     ws = get_worksheet()
     if ws is not None:
-        ws.clear()
-        ws.append_row(SHEET_HEADERS)
-        return
+        try:
+            ws.clear()
+            ws.append_row(SHEET_HEADERS)
+            return
+        except Exception:
+            pass
 
     with get_conn() as conn:
         conn.execute("DELETE FROM facilities")
+
+
+# ---------- Styling ----------
+<style>
+:root {{ --green:{GREEN}; --blue:{BLUE}; --link:{LINK}; --dark:{DARK}; }}
+.block-container { padding-top: 3rem; max-width: 1300px; }
+#MainMenu, footer { visibility: hidden; }
+html, body, [class*="css"] { font-family: Verdana, "Segoe UI", sans-serif; }
+
+/* Header banner */
+.app-header { background: var(--green); color: #fff; padding: 12px 24px;
+  border-radius: 8px; display: flex; align-items: center; gap: 18px;
+  position: relative; margin-bottom: 16px; }
+.app-header .logos { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.app-header .brand { min-width: 0; }
+.app-header img { height: 72px; width: auto; }
+.app-header .small { font-size: .8rem; }
+.app-header .dept { font-weight: 700; font-size: .95rem; margin-bottom: 2px; }
+.app-header .title { font-size: 1.9rem; font-weight: 800; line-height: 1.15; }
+.app-header .clock { position: absolute; top: 10px; right: 20px; font-size: .85rem; }
+
+/* Left filter panel header */
+.panel-head { background: var(--blue); color: #fff; font-weight: 700;
+  padding: 8px 16px; border-radius: 6px 6px 0 0; font-size: .88rem; }
+.page-title { font-size: 1.5rem; font-weight: 800; color: #E5E7EB;
+  border-left: 6px solid var(--green); padding-left: 12px; margin: 6px 0 14px 0; }
+
+/* KPI cards */
+.kpi { background: #fff; border: 1px solid #E5E7EB; border-radius: 8px;
+  padding: 14px 18px; border-left: 6px solid var(--c);
+  box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+.kpi .label { color: #6B7280; font-size: .72rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .04em; }
+.kpi .value { color: var(--dark); font-size: 2rem; font-weight: 800; line-height: 1.2; }
+.kpi .sub { color: #9CA3AF; font-size: .74rem; }
+
+.section-title { font-weight: 700; color: inherit; font-size: 1rem; margin-bottom: 4px; }
+
+/* Billboard-style table */
+table.bb { width: 100%; border-collapse: collapse; font-size: .88rem; }
+table.bb th { background: #F5F5F5; text-align: left; padding: 10px 12px;
+  border: 1px solid #E5E7EB; color: var(--dark); }
+table.bb td { padding: 10px 12px; border: 1px solid #E5E7EB; vertical-align: top; }
+table.bb tr:nth-child(even) td { background: #F5F5F5; }
+table.bb .lnk { color: var(--link); }
+table.bb .meta { color: #6B7280; font-size: .78rem; margin-top: 2px; }
+.badge { display: inline-block; padding: 3px 12px; border-radius: 4px;
+  border: 1px solid #D1D5DB; background: #fff; font-size: .8rem; }
+.badge.yes { border-color: var(--green); color: #2F7D32; background: #EEF8EE; }
+.badge.no { color: #6B7280; }
+</style>
+"""
+
+
+def esc(x):
+    return "" if x is None or (isinstance(x, float) and pd.isna(x)) else html.escape(str(x))
+
+
+def kpi(label, value, sub, color):
+    return (
+        f'<div class="kpi" style="--c:{color}"><div class="label">{label}</div>'
+        f'<div class="value">{value}</div><div class="sub">{sub}</div></div>'
+    )
+
+
+def section(title):
+    st.markdown(f'<div class="section-title">{title}</div>', unsafe_allow_html=True)
+
+
+def render_header(page_label):
+    manila = timezone(timedelta(hours=8))
+    now = datetime.now(manila).strftime("%B %d, %Y %I:%M %p")
+    imgs = "".join(
+        f'<img src="{u}">'
+        for u in (logo_uri("doh_logo"), logo_uri("bagong_pilipinas"), logo_uri("logo"))
+        if u
+    )
+    st.markdown(
+        f'<div class="app-header"><div class="logos">{imgs}</div><div class="brand">'
+        f'<div class="small">Republic of the Philippines</div>'
+        f'<div class="dept">Department of Health</div>'
+        f'<div class="title">Health System Resilience Project (HSRP)</div>'
+        f'</div><div class="clock">{now}</div></div>'
+        f'<div class="page-title">{page_label}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def recent_table(rows):
+    head = f"<tr><th>Facility</th><th>Province</th><th>Facility Type</th><th>Name of EMR</th><th>{YAKAP_COL}</th><th>{GAMOT_COL}</th><th>{OWN_COL}</th></tr>"
+    body = ""
+    for _, r in rows.iterrows():
+        badge = "yes" if has_emr(r["Name of EMR"]) else "no"
+        body += (
+            f'<tr><td><span class="lnk">{esc(r["Name of Facility"])}</span>'
+            f'<div class="meta">{esc(r["Address"])}</div></td>'
+            f'<td>{esc(r["Province"])}</td><td>{esc(r["Facility Type"])}</td>'
+            f'<td><span class="badge {badge}">{esc(r["Name of EMR"]) or "-"}</span></td>'
+            f'<td><span class="badge {"yes" if r.get(YAKAP_COL) == "Yes" else "no"}">{esc(r.get(YAKAP_COL, "")) or "-"}</span></td>'
+            f'<td><span class="badge {"yes" if r.get(GAMOT_COL) == "Yes" else "no"}">{esc(r.get(GAMOT_COL, "")) or "-"}</span></td>'
+            f'<td>{esc(r.get(OWN_COL, "")) or "-"}</td></tr>'
+        )
+    return f'<table class="bb">{head}{body}</table>'
+
+
+def add_emr_columns(frame):
+    """Add 'EMR System': the EMR name as typed, or 'No EMR'. Case variants are merged."""
+    frame = frame.copy()
+    frame["EMR System"] = frame["Name of EMR"].apply(lambda x: clean_text(x) if has_emr(x) else "No EMR")
+    named = frame.loc[frame["EMR System"] != "No EMR", "EMR System"]
+    if not named.empty:
+        canon = named.groupby(named.str.lower()).agg(lambda x: x.value_counts().idxmax())
+        frame["EMR System"] = frame["EMR System"].apply(
+            lambda x: x if x == "No EMR" else canon.get(x.lower(), x)
+        )
+    return frame
+
+
+# ---------- Dashboard ----------
+def render_dashboard(df):
+    df = add_emr_columns(df)
+    systems = set(df["EMR System"])
+    emr_options = sorted(systems - {"No EMR"}, key=str.lower) + (["No EMR"] if "No EMR" in systems else [])
+    st.markdown('<div class="panel-head">Filter Facilities</div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        f1, f2, f3, f4 = st.columns(4)
+        sel_prov = f1.multiselect("Province", PROVINCES, placeholder="All provinces")
+        sel_type = f2.multiselect("Facility Type", FACILITY_TYPES, placeholder="All types")
+        sel_emr = f3.multiselect("Name of EMR", emr_options, placeholder="All")
+        search = f4.text_input("Facility name")
+    right = st.container()
+
+    data = df.copy()
+    if sel_prov:
+        data = data[data["Province"].isin(sel_prov)]
+    if sel_type:
+        data = data[data["Facility Type"].isin(sel_type)]
+    if sel_emr:
+        data = data[data["EMR System"].isin(sel_emr)]
+    if search:
+        data = data[data["Name of Facility"].str.contains(search, case=False, na=False)]
+
+    with right:
+        if df.empty:
+            st.info("No data yet. Go to **Add Facility** or **Import / Export** to get started.")
+            return
+        if data.empty:
+            st.warning("No records match the filters.")
+            return
+
+        data["EMR Status"] = data["EMR System"].apply(lambda x: "No EMR" if x == "No EMR" else "With EMR")
+        total = len(data)
+        with_emr = int((data["EMR Status"] == "With EMR").sum())
+        without_emr = total - with_emr
+        covered = data["Province"].nunique()
+        rate = with_emr / total * 100
+
+        # KPI cards
+        k1, k2, k3, k4 = st.columns(4)
+        k1.markdown(kpi("Total Facilities", total, "matching records", GREEN), unsafe_allow_html=True)
+        k2.markdown(kpi("Provinces Covered", f"{covered}/{len(PROVINCES)}", "with at least 1 facility", BLUE), unsafe_allow_html=True)
+        k3.markdown(kpi("With EMR", with_emr, f"{rate:.0f}% of facilities", GREEN_DARK), unsafe_allow_html=True)
+        k4.markdown(kpi("Without EMR", without_emr, f"{100 - rate:.0f}% of facilities", AMBER), unsafe_allow_html=True)
+
+        st.write("")
+
+        # Donut + facility types
+        c1, c2 = st.columns([1, 1.4])
+        with c1:
+            with st.container(border=True):
+                section("EMR Adoption")
+                donut_df = pd.DataFrame(
+                    {"Status": ["With EMR", "No EMR"], "Count": [with_emr, without_emr]}
+                )
+                donut = (
+                    alt.Chart(donut_df)
+                    .mark_arc(innerRadius=55, outerRadius=90)
+                    .encode(
+                        theta="Count:Q",
+                        color=alt.Color(
+                            "Status:N",
+                            scale=alt.Scale(domain=["With EMR", "No EMR"], range=[GREEN, GRAY]),
+                            legend=alt.Legend(orient="bottom", title=None),
+                        ),
+                        tooltip=["Status", "Count"],
+                    )
+                    .properties(height=300)
+                )
+                st.altair_chart(donut)
+
+        with c2:
+            with st.container(border=True):
+                section("Facilities by Type")
+                type_df = data["Facility Type"].replace("", "Unspecified").value_counts().reset_index()
+                type_df.columns = ["Type", "Count"]
+                max_count = int(type_df["Count"].max())
+                bars = (
+                    alt.Chart(type_df)
+                    .mark_bar(cornerRadiusEnd=5, color=BLUE)
+                    .encode(
+                        x=alt.X(
+                            "Count:Q", title=None,
+                            scale=alt.Scale(domain=[0, max_count * 1.15]),
+                            axis=alt.Axis(tickMinStep=1, format="d"),
+                        ),
+                        y=alt.Y("Type:N", sort="-x", title=None),
+                        tooltip=["Type", "Count"],
+                    )
+                )
+                labels = bars.mark_text(align="left", dx=4).encode(text="Count:Q")
+                st.altair_chart((bars + labels).properties(height=300))
+
+        # EMR systems used
+        with st.container(border=True):
+            section("Facilities by Name of EMR")
+            emr_df = data["EMR System"].value_counts().reset_index()
+            emr_df.columns = ["System", "Count"]
+            max_emr = int(emr_df["Count"].max())
+            emr_bars = (
+                alt.Chart(emr_df)
+                .mark_bar(cornerRadiusEnd=5)
+                .encode(
+                    x=alt.X(
+                        "Count:Q", title=None,
+                        scale=alt.Scale(domain=[0, max_emr * 1.15]),
+                        axis=alt.Axis(tickMinStep=1, format="d"),
+                    ),
+                    y=alt.Y("System:N", sort="-x", title=None),
+                    color=alt.condition(
+                        alt.datum.System == "No EMR", alt.value(GRAY), alt.value(GREEN)
+                    ),
+                    tooltip=["System", "Count"],
+                )
+            )
+            emr_labels = emr_bars.mark_text(align="left", dx=4).encode(
+                text="Count:Q", color=alt.value("#374151")
+            )
+            st.altair_chart((emr_bars + emr_labels).properties(height=max(120, 34 * len(emr_df))))
+
+        # Facilities per province
+        with st.container(border=True):
+            section("Facilities per Province")
+            prov_df = data.groupby(["Province", "EMR Status"]).size().reset_index(name="Count")
+            stacked = (
+                alt.Chart(prov_df)
+                .mark_bar(cornerRadiusEnd=4)
+                .encode(
+                    x=alt.X("Count:Q", title=None, axis=alt.Axis(tickMinStep=1, format="d")),
+                    y=alt.Y("Province:N", sort="-x", title=None),
+                    color=alt.Color(
+                        "EMR Status:N",
+                        scale=alt.Scale(domain=["With EMR", "No EMR"], range=[GREEN, GRAY]),
+                        legend=alt.Legend(orient="top", title=None),
+                    ),
+                    tooltip=["Province", "EMR Status", "Count"],
+                )
+                .properties(height=max(280, 26 * data["Province"].nunique()))
+            )
+            st.altair_chart(stacked)
+
+        # Province summary
+        with st.container(border=True):
+            section("Province Summary")
+            summary = (
+                data.groupby("Province")
+                .agg(Facilities=("ID", "count"),
+                     With_EMR=("EMR Status", lambda s: (s == "With EMR").sum()))
+                .reindex(sel_prov if sel_prov else PROVINCES)
+                .fillna(0)
+                .astype(int)
+                .reset_index()
+            )
+            summary["EMR %"] = (
+                summary["With_EMR"] / summary["Facilities"].replace(0, pd.NA) * 100
+            ).fillna(0).astype(float)
+            summary = summary.rename(columns={"With_EMR": "With EMR"})
+            st.dataframe(
+                summary,
+                hide_index=True,
+                column_config={
+                    "EMR %": st.column_config.ProgressColumn(
+                        "EMR %", min_value=0, max_value=100, format="%.0f%%"
+                    )
+                },
+            )
+
+        # Recently added (billboard style)
+        with st.container(border=True):
+            section("Recently Added Facilities")
+            st.markdown(
+                recent_table(data.sort_values("ID", ascending=False).head(10)),
+                unsafe_allow_html=True,
+            )
+
+
+# ---------- Import helpers ----------
+_PROV_BY_LOWER = {p.lower(): p for p in PROVINCES}
+_PROV_LONGEST_FIRST = sorted(PROVINCES, key=len, reverse=True)
+
+
+def clean_text(x):
+    return "" if x is None else str(x).strip()
+
+
+def norm(text):
+    """Normalize a name for duplicate checks: ignore case, punctuation, extra spaces."""
+    t = re.sub(r"[^a-z0-9 ]+", " ", clean_text(text).lower())
+    return " ".join(t.split())
+
+
+def detect_province(text):
+    """Find one of the 17 province names inside any text (e.g. an address)."""
+    t = clean_text(text).lower()
+    for prov in _PROV_LONGEST_FIRST:
+        if prov.lower() in t:
+            return prov
+    return None
+
+
+def match_province(text):
+    """Match a Province cell to the official list (ignores case, trailing commas)."""
+    t = clean_text(text).strip(" ,.").lower()
+    return _PROV_BY_LOWER.get(t) or detect_province(t)
 
 
 # ---------- Security / Login ----------
@@ -285,7 +633,6 @@ def check_password():
             login_btn = st.button("Log In", type="primary", use_container_width=True)
 
             if login_btn:
-                # Default credentials (can be configured in Streamlit Secrets if deployed)
                 valid_user = st.secrets.get("AUTH_USER", "admin") if hasattr(st, "secrets") and "AUTH_USER" in st.secrets else "admin"
                 valid_pwd = st.secrets.get("AUTH_PASSWORD", "hsrp2026") if hasattr(st, "secrets") and "AUTH_PASSWORD" in st.secrets else "hsrp2026"
 
@@ -310,7 +657,6 @@ init_db()
 if not check_password():
     st.stop()
 
-# Logout button sa ilalim ng sidebar
 with st.sidebar:
     if st.button("🚪 Log out", use_container_width=True):
         st.session_state["authenticated"] = False
@@ -358,9 +704,6 @@ elif page == "Add Facility":
         ftype = st.selectbox("Facility Type", FACILITY_TYPES)
         address = st.text_area("Address")
         emr = st.text_input("Name of EMR", placeholder="Type the EMR the facility uses (leave blank if none)")
-        yakap = st.selectbox(YAKAP_COL, YN_OPTIONS)
-        gamot = st.selectbox(GAMOT_COL, YN_OPTIONS)
-        ownership = st.selectbox(OWN_COL, OWN_OPTIONS, help="P = Private, G = Government")
         submitted = st.form_submit_button("Save")
 
     if submitted:
@@ -402,9 +745,6 @@ elif page == "Edit / Delete":
                 ftype = st.selectbox("Facility Type", FACILITY_TYPES, index=idx(FACILITY_TYPES, rec["Facility Type"]))
                 address = st.text_area("Address", rec["Address"] or "")
                 emr = st.text_input("Name of EMR", rec["Name of EMR"] or "")
-                yakap = st.selectbox(YAKAP_COL, YN_OPTIONS, index=YN_OPTIONS.index(norm_yn(rec[YAKAP_COL])))
-                gamot = st.selectbox(GAMOT_COL, YN_OPTIONS, index=YN_OPTIONS.index(norm_yn(rec[GAMOT_COL])))
-                ownership = st.selectbox(OWN_COL, OWN_OPTIONS, index=OWN_OPTIONS.index(norm_own(rec[OWN_COL])), help="P = Private, G = Government")
                 b1, b2 = st.columns(2)
                 save = b1.form_submit_button("Update")
                 remove = b2.form_submit_button("Delete this facility")
@@ -563,15 +903,12 @@ elif page == "Import / Export":
 
         # Step 1: match columns
         st.markdown("**Step 1 - Match your file's columns**")
-        m = st.columns(8)
+        m = st.columns(5)
         name_col = m[0].selectbox("Name of Facility", options, index=options.index(guess(("name", "facility"), ("type", "emr", "ehr"))))
         prov_col = m[1].selectbox("Province", options, index=options.index(guess(("province",))))
         type_col = m[2].selectbox("Facility Type", options, index=options.index(guess(("type",))))
         addr_col = m[3].selectbox("Address", options, index=options.index(guess(("address",))))
         emr_col = m[4].selectbox("Name of EMR", options, index=options.index(guess(("emr", "ehr"))))
-        yakap_col = m[5].selectbox(YAKAP_COL, options, index=options.index(guess(("yakap",))))
-        gamot_col = m[6].selectbox(GAMOT_COL, options, index=options.index(guess(("package", "provider"))))
-        own_col = m[7].selectbox(OWN_COL, options, index=options.index(guess(("ownership", "owner"))))
 
         # Step 2: province
         st.markdown("**Step 2 - Province**")
@@ -717,7 +1054,8 @@ elif page == "Import / Export":
                 if rec["Status"] == "OK":
                     create_facility(
                         rec["Province"], rec["Name of Facility"], rec["Facility Type"],
-                        rec["Address"], rec["Name of EMR"], rec[YAKAP_COL], rec[GAMOT_COL], rec[OWN_COL],
+                        rec["Address"], rec["Name of EMR"],
+                        rec[YAKAP_COL], rec[GAMOT_COL], rec[OWN_COL],
                     )
                 elif rec["Status"] == "Already in database" and update_mode:
                     fid, o_name, o_t, o_a, o_e, o_y, o_g, o_o = existing_map[

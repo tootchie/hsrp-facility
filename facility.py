@@ -1,7 +1,7 @@
 """
 HSRP Facility Management App (CRUD + Dashboard)
 Health System Resilience Project - Department of Health
-Columns: Province | Name of Facility | Facility Type | Address | EMR
+Columns: Province | Name of Facility | Facility Type | Address | EMR | Accredited YAKAP with GAMOT | Accredited GAMOT package provider?
 
 Run:
     python -m pip install streamlit pandas
@@ -24,8 +24,6 @@ from pathlib import Path
 import altair as alt          # comes installed with streamlit
 import pandas as pd
 import streamlit as st
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 
 BASE_DIR = Path(__file__).parent
 DB_FILE = BASE_DIR / "facilities.db"
@@ -104,62 +102,12 @@ def logo_uri(stem):
     return f"data:{mime};base64," + base64.b64encode(p.read_bytes()).decode()
 
 
-# ---------- Database (Google Sheets with SQLite fallback) ----------
-SCOPE = [
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/drive",
-]
-
-SHEET_HEADERS = [
-    "ID", "Province", "Name of Facility", "Facility Type", "Address",
-    "Name of EMR", YAKAP_COL, GAMOT_COL, OWN_COL
-]
-
-
-@st.cache_resource
-def get_gspread_client():
-    if hasattr(st, "secrets") and "gcp_service_account" in st.secrets:
-        try:
-            creds_dict = dict(st.secrets["gcp_service_account"])
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
-            return gspread.authorize(creds)
-        except Exception:
-            return None
-    return None
-
-
-def get_worksheet():
-    client = get_gspread_client()
-    if not client:
-        return None
-    try:
-        url = None
-        if hasattr(st, "secrets"):
-            if "general" in st.secrets and "SPREADSHEET_URL" in st.secrets["general"]:
-                url = st.secrets["general"]["SPREADSHEET_URL"]
-            elif "SPREADSHEET_URL" in st.secrets:
-                url = st.secrets["SPREADSHEET_URL"]
-        if not url:
-            return None
-        sheet = client.open_by_url(url)
-        ws = sheet.sheet1
-        first_row = ws.row_values(1)
-        if not first_row:
-            ws.append_row(SHEET_HEADERS)
-        return ws
-    except Exception:
-        return None
-
-
+# ---------- Database ----------
 def get_conn():
     return sqlite3.connect(DB_FILE)
 
 
 def init_db():
-    ws = get_worksheet()
-    if ws is not None:
-        return
-
     with get_conn() as conn:
         conn.execute(
             """
@@ -176,6 +124,7 @@ def init_db():
             )
             """
         )
+        # upgrade older databases that don't have the new columns yet
         cols = [r[1] for r in conn.execute("PRAGMA table_info(facilities)")]
         if "yakap" not in cols:
             conn.execute("ALTER TABLE facilities ADD COLUMN yakap TEXT")
@@ -185,22 +134,16 @@ def init_db():
             conn.execute("ALTER TABLE facilities ADD COLUMN ownership TEXT")
 
 
-def read_facilities():
-    ws = get_worksheet()
-    if ws is not None:
-        try:
-            records = ws.get_all_records()
-            if not records:
-                return pd.DataFrame(columns=SHEET_HEADERS)
-            df = pd.DataFrame(records)
-            for h in SHEET_HEADERS:
-                if h not in df.columns:
-                    df[h] = ""
-            df["ID"] = pd.to_numeric(df["ID"], errors="coerce").fillna(0).astype(int)
-            return df.sort_values(by=["Province", "Name of Facility"], key=lambda col: col.astype(str).str.lower())
-        except Exception:
-            pass
+def create_facility(province, name, ftype, address, emr, yakap="", gamot="", ownership=""):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO facilities (province, name, facility_type, address, emr, yakap, gamot, ownership) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (province, name, ftype, address, emr, yakap, gamot, ownership),
+        )
 
+
+def read_facilities():
     with get_conn() as conn:
         return pd.read_sql_query(
             "SELECT id AS ID, province AS Province, name AS 'Name of Facility', "
@@ -213,38 +156,7 @@ def read_facilities():
         )
 
 
-def create_facility(province, name, ftype, address, emr, yakap="", gamot="", ownership=""):
-    ws = get_worksheet()
-    if ws is not None:
-        try:
-            df = read_facilities()
-            next_id = int(df["ID"].max() + 1) if not df.empty and df["ID"].max() > 0 else 1
-            row = [next_id, province, name, ftype, address, emr, yakap, gamot, ownership]
-            ws.append_row(row)
-            return
-        except Exception:
-            pass
-
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO facilities (province, name, facility_type, address, emr, yakap, gamot, ownership) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (province, name, ftype, address, emr, yakap, gamot, ownership),
-        )
-
-
 def update_facility(fid, province, name, ftype, address, emr, yakap="", gamot="", ownership=""):
-    ws = get_worksheet()
-    if ws is not None:
-        try:
-            cell = ws.find(str(fid), in_column=1)
-            if cell:
-                row_num = cell.row
-                ws.update(values=[[fid, province, name, ftype, address, emr, yakap, gamot, ownership]], range_name=f"A{row_num}:I{row_num}")
-            return
-        except Exception:
-            pass
-
     with get_conn() as conn:
         conn.execute(
             "UPDATE facilities SET province=?, name=?, facility_type=?, "
@@ -254,49 +166,28 @@ def update_facility(fid, province, name, ftype, address, emr, yakap="", gamot=""
 
 
 def delete_facility(fid):
-    ws = get_worksheet()
-    if ws is not None:
-        try:
-            cell = ws.find(str(fid), in_column=1)
-            if cell:
-                ws.delete_rows(cell.row)
-            return
-        except Exception:
-            pass
-
     with get_conn() as conn:
         conn.execute("DELETE FROM facilities WHERE id=?", (fid,))
 
 
 def delete_many(ids):
-    ws = get_worksheet()
-    if ws is not None:
-        for fid in ids:
-            delete_facility(int(fid))
-        return
-
     with get_conn() as conn:
         conn.executemany("DELETE FROM facilities WHERE id=?", [(int(i),) for i in ids])
 
 
 def delete_all():
-    ws = get_worksheet()
-    if ws is not None:
-        try:
-            ws.clear()
-            ws.append_row(SHEET_HEADERS)
-            return
-        except Exception:
-            pass
-
     with get_conn() as conn:
         conn.execute("DELETE FROM facilities")
 
 
 # ---------- Styling ----------
+CSS = f"""
 <style>
 :root {{ --green:{GREEN}; --blue:{BLUE}; --link:{LINK}; --dark:{DARK}; }}
+""" + """
 .block-container { padding-top: 3rem; max-width: 1300px; }
+div[data-testid="stVerticalBlock"] { gap: .75rem; }
+div[data-testid="stElementContainer"]:has(> .stMarkdown) { margin-bottom: -.35rem; }
 #MainMenu, footer { visibility: hidden; }
 html, body, [class*="css"] { font-family: Verdana, "Segoe UI", sans-serif; }
 
@@ -314,9 +205,9 @@ html, body, [class*="css"] { font-family: Verdana, "Segoe UI", sans-serif; }
 
 /* Left filter panel header */
 .panel-head { background: var(--blue); color: #fff; font-weight: 700;
-  padding: 8px 16px; border-radius: 6px 6px 0 0; font-size: .88rem; }
+  padding: 7px 14px; border-radius: 6px 6px 0 0; font-size: .85rem; }
 .page-title { font-size: 1.5rem; font-weight: 800; color: #E5E7EB;
-  border-left: 6px solid var(--green); padding-left: 12px; margin: 6px 0 14px 0; }
+  border-left: 6px solid var(--green); padding-left: 12px; margin: 4px 0 14px 0; }
 
 /* KPI cards */
 .kpi { background: #fff; border: 1px solid #E5E7EB; border-radius: 8px;
@@ -374,7 +265,7 @@ def render_header(page_label):
         f'<div class="dept">Department of Health</div>'
         f'<div class="title">Health System Resilience Project (HSRP)</div>'
         f'</div><div class="clock">{now}</div></div>'
-        f'<div class="page-title">{page_label}</div>',
+        f'<div class="page-title" style="color:#E5E7EB">{page_label}</div>',
         unsafe_allow_html=True,
     )
 
@@ -389,9 +280,9 @@ def recent_table(rows):
             f'<div class="meta">{esc(r["Address"])}</div></td>'
             f'<td>{esc(r["Province"])}</td><td>{esc(r["Facility Type"])}</td>'
             f'<td><span class="badge {badge}">{esc(r["Name of EMR"]) or "-"}</span></td>'
-            f'<td><span class="badge {"yes" if r.get(YAKAP_COL) == "Yes" else "no"}">{esc(r.get(YAKAP_COL, "")) or "-"}</span></td>'
-            f'<td><span class="badge {"yes" if r.get(GAMOT_COL) == "Yes" else "no"}">{esc(r.get(GAMOT_COL, "")) or "-"}</span></td>'
-            f'<td>{esc(r.get(OWN_COL, "")) or "-"}</td></tr>'
+            f'<td><span class="badge {"yes" if r[YAKAP_COL] == "Yes" else "no"}">{esc(r[YAKAP_COL]) or "-"}</span></td>'
+            f'<td><span class="badge {"yes" if r[GAMOT_COL] == "Yes" else "no"}">{esc(r[GAMOT_COL]) or "-"}</span></td>'
+            f'<td>{esc(r[OWN_COL]) or "-"}</td></tr>'
         )
     return f'<table class="bb">{head}{body}</table>'
 
@@ -633,6 +524,7 @@ def check_password():
             login_btn = st.button("Log In", type="primary", use_container_width=True)
 
             if login_btn:
+                # Default credentials (can be configured in Streamlit Secrets if deployed)
                 valid_user = st.secrets.get("AUTH_USER", "admin") if hasattr(st, "secrets") and "AUTH_USER" in st.secrets else "admin"
                 valid_pwd = st.secrets.get("AUTH_PASSWORD", "hsrp2026") if hasattr(st, "secrets") and "AUTH_PASSWORD" in st.secrets else "hsrp2026"
 
@@ -657,6 +549,7 @@ init_db()
 if not check_password():
     st.stop()
 
+# Logout button sa ilalim ng sidebar
 with st.sidebar:
     if st.button("🚪 Log out", use_container_width=True):
         st.session_state["authenticated"] = False
@@ -704,6 +597,9 @@ elif page == "Add Facility":
         ftype = st.selectbox("Facility Type", FACILITY_TYPES)
         address = st.text_area("Address")
         emr = st.text_input("Name of EMR", placeholder="Type the EMR the facility uses (leave blank if none)")
+        yakap = st.selectbox(YAKAP_COL, YN_OPTIONS)
+        gamot = st.selectbox(GAMOT_COL, YN_OPTIONS)
+        ownership = st.selectbox(OWN_COL, OWN_OPTIONS, help="P = Private, G = Government")
         submitted = st.form_submit_button("Save")
 
     if submitted:
@@ -745,6 +641,9 @@ elif page == "Edit / Delete":
                 ftype = st.selectbox("Facility Type", FACILITY_TYPES, index=idx(FACILITY_TYPES, rec["Facility Type"]))
                 address = st.text_area("Address", rec["Address"] or "")
                 emr = st.text_input("Name of EMR", rec["Name of EMR"] or "")
+                yakap = st.selectbox(YAKAP_COL, YN_OPTIONS, index=YN_OPTIONS.index(norm_yn(rec[YAKAP_COL])))
+                gamot = st.selectbox(GAMOT_COL, YN_OPTIONS, index=YN_OPTIONS.index(norm_yn(rec[GAMOT_COL])))
+                ownership = st.selectbox(OWN_COL, OWN_OPTIONS, index=OWN_OPTIONS.index(norm_own(rec[OWN_COL])), help="P = Private, G = Government")
                 b1, b2 = st.columns(2)
                 save = b1.form_submit_button("Update")
                 remove = b2.form_submit_button("Delete this facility")
@@ -903,12 +802,15 @@ elif page == "Import / Export":
 
         # Step 1: match columns
         st.markdown("**Step 1 - Match your file's columns**")
-        m = st.columns(5)
+        m = st.columns(8)
         name_col = m[0].selectbox("Name of Facility", options, index=options.index(guess(("name", "facility"), ("type", "emr", "ehr"))))
         prov_col = m[1].selectbox("Province", options, index=options.index(guess(("province",))))
         type_col = m[2].selectbox("Facility Type", options, index=options.index(guess(("type",))))
         addr_col = m[3].selectbox("Address", options, index=options.index(guess(("address",))))
         emr_col = m[4].selectbox("Name of EMR", options, index=options.index(guess(("emr", "ehr"))))
+        yakap_col = m[5].selectbox(YAKAP_COL, options, index=options.index(guess(("yakap",))))
+        gamot_col = m[6].selectbox(GAMOT_COL, options, index=options.index(guess(("package", "provider"))))
+        own_col = m[7].selectbox(OWN_COL, options, index=options.index(guess(("ownership", "owner"))))
 
         # Step 2: province
         st.markdown("**Step 2 - Province**")
@@ -1054,8 +956,7 @@ elif page == "Import / Export":
                 if rec["Status"] == "OK":
                     create_facility(
                         rec["Province"], rec["Name of Facility"], rec["Facility Type"],
-                        rec["Address"], rec["Name of EMR"],
-                        rec[YAKAP_COL], rec[GAMOT_COL], rec[OWN_COL],
+                        rec["Address"], rec["Name of EMR"], rec[YAKAP_COL], rec[GAMOT_COL], rec[OWN_COL],
                     )
                 elif rec["Status"] == "Already in database" and update_mode:
                     fid, o_name, o_t, o_a, o_e, o_y, o_g, o_o = existing_map[

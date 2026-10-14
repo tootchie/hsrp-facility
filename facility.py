@@ -24,8 +24,6 @@ from pathlib import Path
 import altair as alt          # comes installed with streamlit
 import pandas as pd
 import streamlit as st
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 
 BASE_DIR = Path(__file__).parent
 DB_FILE = BASE_DIR / "facilities.db"
@@ -114,62 +112,12 @@ def logo_uri(stem):
     return f"data:{mime};base64," + base64.b64encode(p.read_bytes()).decode()
 
 
-# ---------- Database (Google Sheets with SQLite fallback) ----------
-SCOPE = [
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/drive",
-]
-
-SHEET_HEADERS = [
-    "ID", "Province", "Name of Facility", "Facility Type", "Address",
-    "Name of EMR", YAKAP_COL, GAMOT_COL, OWN_COL, STATUS_COL
-]
-
-
-@st.cache_resource
-def get_gspread_client():
-    if hasattr(st, "secrets") and "gcp_service_account" in st.secrets:
-        try:
-            creds_dict = dict(st.secrets["gcp_service_account"])
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
-            return gspread.authorize(creds)
-        except Exception:
-            return None
-    return None
-
-
-def get_worksheet():
-    client = get_gspread_client()
-    if not client:
-        return None
-    try:
-        url = None
-        if hasattr(st, "secrets"):
-            if "general" in st.secrets and "SPREADSHEET_URL" in st.secrets["general"]:
-                url = st.secrets["general"]["SPREADSHEET_URL"]
-            elif "SPREADSHEET_URL" in st.secrets:
-                url = st.secrets["SPREADSHEET_URL"]
-        if not url:
-            return None
-        sheet = client.open_by_url(url)
-        ws = sheet.sheet1
-        first_row = ws.row_values(1)
-        if not first_row:
-            ws.append_row(SHEET_HEADERS)
-        return ws
-    except Exception:
-        return None
-
-
+# ---------- Database ----------
 def get_conn():
     return sqlite3.connect(DB_FILE)
 
 
 def init_db():
-    ws = get_worksheet()
-    if ws is not None:
-        return
-
     with get_conn() as conn:
         conn.execute(
             """
@@ -198,22 +146,16 @@ def init_db():
             conn.execute("ALTER TABLE facilities ADD COLUMN dup_status TEXT")
 
 
-def read_facilities():
-    ws = get_worksheet()
-    if ws is not None:
-        try:
-            records = ws.get_all_records()
-            if not records:
-                return pd.DataFrame(columns=SHEET_HEADERS)
-            df = pd.DataFrame(records)
-            for h in SHEET_HEADERS:
-                if h not in df.columns:
-                    df[h] = ""
-            df["ID"] = pd.to_numeric(df["ID"], errors="coerce").fillna(0).astype(int)
-            return df.sort_values(by=["Province", "Name of Facility"], key=lambda col: col.astype(str).str.lower())
-        except Exception:
-            pass
+def create_facility(province, name, ftype, address, emr, yakap="", gamot="", ownership="", dup_status=""):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO facilities (province, name, facility_type, address, emr, yakap, gamot, ownership, dup_status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (province, name, ftype, address, emr, yakap, gamot, ownership, dup_status),
+        )
 
+
+def read_facilities():
     with get_conn() as conn:
         return pd.read_sql_query(
             "SELECT id AS ID, province AS Province, name AS 'Name of Facility', "
@@ -227,38 +169,7 @@ def read_facilities():
         )
 
 
-def create_facility(province, name, ftype, address, emr, yakap="", gamot="", ownership="", dup_status=""):
-    ws = get_worksheet()
-    if ws is not None:
-        try:
-            df = read_facilities()
-            next_id = int(df["ID"].max() + 1) if not df.empty and df["ID"].max() > 0 else 1
-            row = [next_id, province, name, ftype, address, emr, yakap, gamot, ownership, dup_status]
-            ws.append_row(row)
-            return
-        except Exception:
-            pass
-
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO facilities (province, name, facility_type, address, emr, yakap, gamot, ownership, dup_status) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (province, name, ftype, address, emr, yakap, gamot, ownership, dup_status),
-        )
-
-
 def update_facility(fid, province, name, ftype, address, emr, yakap="", gamot="", ownership="", dup_status=""):
-    ws = get_worksheet()
-    if ws is not None:
-        try:
-            cell = ws.find(str(fid), in_column=1)
-            if cell:
-                row_num = cell.row
-                ws.update(values=[[fid, province, name, ftype, address, emr, yakap, gamot, ownership, dup_status]], range_name=f"A{row_num}:J{row_num}")
-            return
-        except Exception:
-            pass
-
     with get_conn() as conn:
         conn.execute(
             "UPDATE facilities SET province=?, name=?, facility_type=?, "
@@ -268,41 +179,16 @@ def update_facility(fid, province, name, ftype, address, emr, yakap="", gamot=""
 
 
 def delete_facility(fid):
-    ws = get_worksheet()
-    if ws is not None:
-        try:
-            cell = ws.find(str(fid), in_column=1)
-            if cell:
-                ws.delete_rows(cell.row)
-            return
-        except Exception:
-            pass
-
     with get_conn() as conn:
         conn.execute("DELETE FROM facilities WHERE id=?", (fid,))
 
 
 def delete_many(ids):
-    ws = get_worksheet()
-    if ws is not None:
-        for fid in ids:
-            delete_facility(int(fid))
-        return
-
     with get_conn() as conn:
         conn.executemany("DELETE FROM facilities WHERE id=?", [(int(i),) for i in ids])
 
 
 def delete_all():
-    ws = get_worksheet()
-    if ws is not None:
-        try:
-            ws.clear()
-            ws.append_row(SHEET_HEADERS)
-            return
-        except Exception:
-            pass
-
     with get_conn() as conn:
         conn.execute("DELETE FROM facilities")
 
@@ -633,6 +519,16 @@ def match_province(text):
 
 
 # ---------- Security / Login ----------
+def _secret(name, default):
+    """Read a value from st.secrets without crashing when it is missing."""
+    try:
+        if name in st.secrets:
+            return st.secrets[name]
+    except Exception:
+        pass
+    return default
+
+
 def check_password():
     """Returns True if user is logged in, otherwise shows a login box and stops execution."""
     if st.session_state.get("authenticated", False):
@@ -649,8 +545,8 @@ def check_password():
             login_btn = st.button("Log In", type="primary", use_container_width=True)
 
             if login_btn:
-                valid_user = st.secrets.get("AUTH_USER", "admin") if hasattr(st, "secrets") and "AUTH_USER" in st.secrets else "admin"
-                valid_pwd = st.secrets.get("AUTH_PASSWORD", "hsrp2026") if hasattr(st, "secrets") and "AUTH_PASSWORD" in st.secrets else "hsrp2026"
+                valid_user = _secret("AUTH_USER", "admin")
+                valid_pwd = _secret("AUTH_PASSWORD", "hsrp2026")
 
                 if user.strip() == valid_user and pwd == valid_pwd:
                     st.session_state["authenticated"] = True
@@ -1158,11 +1054,3 @@ elif page == "Import / Export":
                 "not_imported.csv",
                 "text/csv",
             )
-
-    # Download the full list of facilities
-    st.download_button(
-        "Download the full list of facilities (CSV)",
-        facilities_df.to_csv(index=False).encode("utf-8"),
-        "facilities.csv",
-        "text/csv",
-    )

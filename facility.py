@@ -967,6 +967,11 @@ elif page == "Import / Export":
             else:
                 status = "OK"
                 seen.add(key)
+            # Auto-tag duplicates: anything already seen keeps its row but is
+            # marked Dedup in the Duplicate Status column.
+            auto_status = norm_status(r[STATUS_COL])
+            if not auto_status and status in ("Repeated in file", "Already in database"):
+                auto_status = "Dedup"
             records.append({
                 "File row": int(r["File row"]),
                 "Province": province or "",
@@ -977,7 +982,7 @@ elif page == "Import / Export":
                 YAKAP_COL: norm_yn(r[YAKAP_COL]),
                 GAMOT_COL: norm_yn(r[GAMOT_COL]),
                 OWN_COL: norm_own(r[OWN_COL]),
-                STATUS_COL: norm_status(r[STATUS_COL]),
+                STATUS_COL: auto_status,
                 "Status": status,
             })
 
@@ -992,9 +997,9 @@ elif page == "Import / Export":
         # Step 5: summary and import
         st.markdown("**Step 5 - Import**")
         s1, s2, s3, s4, s5 = st.columns(5)
-        s1.metric("New", n_ok)
+        s1.metric("New", n_ok, help="Idadagdag bilang bagong record")
         s2.metric("Already in database", n_exist)
-        s3.metric("Repeated in file", n_rep)
+        s3.metric("Duplicates to add", n_rep, help="Idadagdag din, ngunit nakatatakan na Dedup")
         s4.metric("Province not set", n_prov)
         s5.metric("Missing name", n_name)
 
@@ -1004,15 +1009,25 @@ elif page == "Import / Export":
         if n_prov:
             st.warning("Rows with no province are skipped. Set their province in the table above to include them.")
 
-        to_do = n_ok + (n_exist if update_mode else 0)
+        n_dup = n_rep
+        to_do = n_ok + n_dup + (n_exist if update_mode else 0)
         if st.button("Import", disabled=to_do == 0):
             updated = 0
+            added_dup = 0
             for rec in records:
                 if rec["Status"] == "OK":
                     create_facility(
                         rec["Province"], rec["Name of Facility"], rec["Facility Type"],
                         rec["Address"], rec["Name of EMR"],
                         rec[YAKAP_COL], rec[GAMOT_COL], rec[OWN_COL], rec[STATUS_COL],
+                    )
+                    added_dup += 1
+                elif rec["Status"] == "Repeated in file":
+                    # Keep the repeated row too, tagged as Dedup.
+                    create_facility(
+                        rec["Province"], rec["Name of Facility"], rec["Facility Type"],
+                        rec["Address"], rec["Name of EMR"],
+                        rec[YAKAP_COL], rec[GAMOT_COL], rec[OWN_COL], "Dedup",
                     )
                 elif rec["Status"] == "Already in database" and update_mode:
                     fid, o_name, o_t, o_a, o_e, o_y, o_g, o_o, o_s = existing_map[
@@ -1030,15 +1045,18 @@ elif page == "Import / Export":
                     )
                     updated += 1
             msg = f"Added {n_ok} new facilities."
+            if n_dup:
+                msg += f" Added {n_dup} duplicate(s) marked as Dedup."
             if update_mode:
                 msg += f" Updated {updated} existing."
             reasons = {
                 "Already in database": "Already in database - skipped",
-                "Repeated in file": "Repeated in the file - skipped",
                 "Province not set": "No province",
                 "Missing facility name": "No facility name",
             }
             handled = (prev["Status"] == "OK") | (
+                prev["Status"] == "Repeated in file"
+            ) | (
                 (prev["Status"] == "Already in database") & update_mode
             )
             not_done = prev[~handled].copy()

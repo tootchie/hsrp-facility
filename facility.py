@@ -129,10 +129,11 @@ def seed_nhfr(file_bytes):
         conn.executemany(
             "INSERT INTO facilities (code, province, name, facility_type, address, "
             "emr, yakap, gamot, ownership, dup_status, nhfr_status) "
-            "VALUES (?, ?, ?, ?, ?, ?, '', '', ?, '', ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (r["Code"], r["Province"], r["Name of Facility"], r["Facility Type"],
-                 r["Address"], r["Name of EMR"], r["Ownership"], r["NHFR Status"])
+                 r["Address"], r["Name of EMR"], "", "", r["Ownership"], "",
+                 r["NHFR Status"])
                 for r in rows
             ],
         )

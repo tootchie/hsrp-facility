@@ -624,7 +624,7 @@ def check_password():
                     st.session_state["authenticated"] = True
                     st.rerun()
                 else:
-                    st.error("Maling username o password. Pakisubukang muli.")
+                    st.error("Incorrect username or password. Please try again.")
     return False
 
 
@@ -692,7 +692,7 @@ elif page == "Add Facility":
         yakap = b1.selectbox(YAKAP_COL, YN_OPTIONS)
         gamot = b2.selectbox(GAMOT_COL, YN_OPTIONS)
         ownership = b3.selectbox(OWN_COL, OWN_OPTIONS, help="P = Private, G = Government")
-        status = st.selectbox(STATUS_COL, STATUS_OPTIONS, help="Lagyan ng Duplicate kung duplicate ng ibang record")
+        status = st.selectbox(STATUS_COL, STATUS_OPTIONS, help="Set to Duplicate if this is a duplicate of another record")
         submitted = st.form_submit_button("Save")
 
     if submitted:
@@ -837,8 +837,8 @@ elif page == "Find Duplicates":
             )
             st.dataframe(dups.drop(columns=["_key"]), hide_index=True)
             st.caption(
-                "Hindi na po binubura ang mga record. Minamarkahan lang sila bilang **Duplicate** "
-                "dito sa system para makita pa rin sila."
+                "Records are no longer deleted. They are only marked as **Duplicate** "
+                "so they stay visible in the system."
             )
             if already:
                 st.info(f"{len(already)} record(s) are already marked as Duplicate.")
@@ -855,7 +855,7 @@ elif page == "Find Duplicates":
                     )
                     marked += 1
                 st.success(
-                    f"Marked {marked} duplicate record(s) as Duplicate. Nandiyan pa rin sila sa system. "
+                    f"Marked {marked} duplicate record(s) as Duplicate. They remain in the system. "
                     "Refresh the page to update the list."
                 )
 
@@ -863,29 +863,29 @@ elif page == "Find Duplicates":
 elif page == "Fill Addresses":
     st.subheader("Fill Missing Addresses from the NHFR List")
     st.caption(
-        "Gagamitin ang NHFR facility list bilang reference para punan ang blangkong Address. "
-        "Hindi binabago ang mga record na may address na."
+        "The NHFR facility list is used as a reference to fill in blank addresses. "
+        "Records that already have an address are not changed."
     )
 
     up = st.file_uploader("NHFR file (.xlsx)", type=["xlsx"])
     if up is None:
-        st.info("I-upload ang NHFR file (FACILITY_LIST) para magsimula.")
+        st.info("Upload the NHFR file (FACILITY_LIST) to begin.")
     else:
         try:
             index = nhfr_index(up.getvalue())
         except Exception as e:
-            st.error(f"Hindi mabasa ang file: {e}")
+            st.error(f"Could not read the file: {e}")
             index = None
 
         if index:
-            st.success(f"Nabasa ang {sum(len(v) for v in index.values())} record(s) mula sa NHFR.")
+            st.success(f"Loaded {sum(len(v) for v in index.values())} record(s) from the NHFR list.")
 
             blanks = df[
                 df["Address"].apply(lambda x: not clean_text(x))
             ].copy()
 
             if blanks.empty:
-                st.info("Walang facility na blangkong ang address. Wala nang pupunan.")
+                st.info("No facility has a blank address. Nothing to fill.")
             else:
                 rows = []
                 for _, r in blanks.iterrows():
@@ -921,13 +921,15 @@ elif page == "Fill Addresses":
                 c4.metric("Not found in NHFR", n_missing)
 
                 st.caption(
-                    "Ang **Ready** ay isasalin sa Address. Ang **For Review** ay may "
-                    "higit sa isang tugma sa NHFR - pakitingnan bago ituloy."
+                    "**Ready** rows are copied into the Address field. **For Review** rows "
+                    "matched more than one NHFR entry - check them before continuing."
                 )
                 st.dataframe(prev, hide_index=True)
 
-                with st.expander("Also fill the 'For Review' rows (unang tugma lang ang gagamitin)"):
-                    use_review = st.checkbox("Isama ang For Review rows")
+                with st.expander("Also fill the 'For Review' rows (only the first match is used):"):
+                    use_review = st.checkbox("Also fill the For Review rows")
+
+
 
                 to_fill = prev[prev["Result"] == "Ready"]
                 if use_review:
@@ -943,8 +945,8 @@ elif page == "Fill Addresses":
                             src.get(OWN_COL, ""), src.get(STATUS_COL, ""),
                         )
                     st.success(
-                        f"Napunan ang {len(to_fill)} address(es) mula sa NHFR. "
-                        "Buksan ang Dashboard para makita."
+                        f"Filled {len(to_fill)} address(es) from the NHFR list. "
+                        "Open the Dashboard to see them."
                     )
                     st.session_state["nhfr_report"] = prev[prev["Result"] == "Not found"]
                     st.rerun()
@@ -952,7 +954,7 @@ elif page == "Fill Addresses":
     not_found = st.session_state.get("nhfr_report")
     if not_found is not None and not not_found.empty:
         st.markdown("---")
-        st.markdown("**Hindi natagpuan sa NHFR**")
+        st.markdown("**Not found in the NHFR list**")
         st.dataframe(not_found, hide_index=True)
 
 # ----- IMPORT / EXPORT -----
@@ -1153,9 +1155,9 @@ elif page == "Import / Export":
         # Step 5: summary and import
         st.markdown("**Step 5 - Import**")
         s1, s2, s3, s4, s5 = st.columns(5)
-        s1.metric("New", n_ok, help="Idadagdag bilang bagong record")
+        s1.metric("New", n_ok, help="Will be added as a new record")
         s2.metric("Already in database", n_exist)
-        s3.metric("Duplicates to add", n_rep, help="Idadagdag din, ngunit nakatatakan na Duplicate")
+        s3.metric("Duplicates to add", n_rep, help="Will also be added, marked as Duplicate")
         s4.metric("Province not set", n_prov)
         s5.metric("Missing name", n_name)
 

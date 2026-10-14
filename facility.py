@@ -126,16 +126,27 @@ def seed_nhfr(file_bytes):
         return 0
     with get_conn() as conn:
         conn.execute("DELETE FROM facilities")
+        data = [
+            (
+                r.get("Code", ""),
+                r.get("Province", ""),
+                r.get("Name of Facility", ""),
+                r.get("Facility Type", ""),
+                r.get("Address", ""),
+                r.get("Name of EMR", ""),
+                "",
+                "",
+                r.get("Ownership", ""),
+                "",
+                r.get("NHFR Status", ""),
+            )
+            for r in rows
+        ]
         conn.executemany(
             "INSERT INTO facilities (code, province, name, facility_type, address, "
             "emr, yakap, gamot, ownership, dup_status, nhfr_status) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                (r["Code"], r["Province"], r["Name of Facility"], r["Facility Type"],
-                 r["Address"], r["Name of EMR"], "", "", r["Ownership"], "",
-                 r["NHFR Status"])
-                for r in rows
-            ],
+            data,
         )
     return len(rows)
 

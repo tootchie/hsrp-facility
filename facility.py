@@ -863,7 +863,7 @@ elif page == "Import / Export":
         yakap_col = m[5].selectbox(YAKAP_COL, options, index=options.index(guess(("yakap",))))
         gamot_col = m[6].selectbox(GAMOT_COL, options, index=options.index(guess(("package", "provider"))))
         own_col = m[7].selectbox(OWN_COL, options, index=options.index(guess(("ownership", "owner"))))
-        status_col = m[8].selectbox(STATUS_COL, options, index=options.index(guess(("status", "dedup"))))
+        status_col = m[8].selectbox(STATUS_COL, options, index=options.index(guess(("status", "duplicate"))))
 
         # Step 2: province
         st.markdown("**Step 2 - Province**")

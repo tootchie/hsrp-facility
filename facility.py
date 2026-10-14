@@ -194,15 +194,25 @@ def delete_all():
 
 
 # ---------- Styling ----------
-CSS = f"""
+CSS = """
 <style>
-:root {{ --green:{GREEN}; --blue:{BLUE}; --link:{LINK}; --dark:{DARK}; }}
+/* ==== DOH / HSRP theme ==== */
+:root {
+  --green: #5BB75B;
+  --green-dark: #3E9A3E;
+  --blue: #2E8FE8;
+  --link: #1D7FBF;
+  --amber: #F59E0B;
+  --gray: #CBD5E1;
+  --dark: #1F2937;
+}
+
 .block-container { padding-top: 3rem; max-width: 1300px; }
 #MainMenu, footer { visibility: hidden; }
 html, body, [class*="css"] { font-family: Verdana, "Segoe UI", sans-serif; }
 
 /* Header banner */
-.app-header { background: var(--green); color: #fff; padding: 12px 24px;
+.app-header { background: #5BB75B; color: #fff; padding: 12px 24px;
   border-radius: 8px; display: flex; align-items: center; gap: 18px;
   position: relative; margin-bottom: 16px; }
 .app-header .logos { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
@@ -213,11 +223,13 @@ html, body, [class*="css"] { font-family: Verdana, "Segoe UI", sans-serif; }
 .app-header .title { font-size: 1.9rem; font-weight: 800; line-height: 1.15; }
 .app-header .clock { position: absolute; top: 10px; right: 20px; font-size: .85rem; }
 
-/* Left filter panel header */
-.panel-head { background: var(--blue); color: #fff; font-weight: 700;
-  padding: 8px 16px; border-radius: 6px 6px 0 0; font-size: .88rem; }
+/* Page title under the banner */
 .page-title { font-size: 1.5rem; font-weight: 800; color: #E5E7EB;
-  border-left: 6px solid var(--green); padding-left: 12px; margin: 6px 0 14px 0; }
+  border-left: 6px solid #5BB75B; padding-left: 12px; margin: 6px 0 14px 0; }
+
+/* Filter panel header */
+.panel-head { background: #2E8FE8; color: #fff; font-weight: 700;
+  padding: 8px 16px; border-radius: 6px 6px 0 0; font-size: .88rem; }
 
 /* KPI cards */
 .kpi { background: #fff; border: 1px solid #E5E7EB; border-radius: 8px;
@@ -225,7 +237,7 @@ html, body, [class*="css"] { font-family: Verdana, "Segoe UI", sans-serif; }
   box-shadow: 0 1px 4px rgba(0,0,0,.06); }
 .kpi .label { color: #6B7280; font-size: .72rem; font-weight: 700;
   text-transform: uppercase; letter-spacing: .04em; }
-.kpi .value { color: var(--dark); font-size: 2rem; font-weight: 800; line-height: 1.2; }
+.kpi .value { color: #1F2937; font-size: 2rem; font-weight: 800; line-height: 1.2; }
 .kpi .sub { color: #9CA3AF; font-size: .74rem; }
 
 .section-title { font-weight: 700; color: inherit; font-size: 1rem; margin-bottom: 4px; }
@@ -233,14 +245,14 @@ html, body, [class*="css"] { font-family: Verdana, "Segoe UI", sans-serif; }
 /* Billboard-style table */
 table.bb { width: 100%; border-collapse: collapse; font-size: .88rem; }
 table.bb th { background: #F5F5F5; text-align: left; padding: 10px 12px;
-  border: 1px solid #E5E7EB; color: var(--dark); }
+  border: 1px solid #E5E7EB; color: #1F2937; }
 table.bb td { padding: 10px 12px; border: 1px solid #E5E7EB; vertical-align: top; }
 table.bb tr:nth-child(even) td { background: #F5F5F5; }
-table.bb .lnk { color: var(--link); }
+table.bb .lnk { color: #1D7FBF; }
 table.bb .meta { color: #6B7280; font-size: .78rem; margin-top: 2px; }
 .badge { display: inline-block; padding: 3px 12px; border-radius: 4px;
   border: 1px solid #D1D5DB; background: #fff; font-size: .8rem; }
-.badge.yes { border-color: var(--green); color: #2F7D32; background: #EEF8EE; }
+.badge.yes { border-color: #5BB75B; color: #2F7D32; background: #EEF8EE; }
 .badge.no { color: #6B7280; }
 </style>
 """

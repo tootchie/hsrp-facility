@@ -46,8 +46,8 @@ FACILITY_TYPES = [
 YAKAP_COL = "Accredited YAKAP with GAMOT"
 GAMOT_COL = "Accredited GAMOT package provider?"
 OWN_COL = "Ownership"
-STATUS_COL = "Duplicate Status"
-STATUS_OPTIONS = ["", "Dedup", "Unique", "For Review"]
+STATUS_COL = "Status"
+STATUS_OPTIONS = ["", "Duplicate", "Unique", "For Review"]
 OWN_OPTIONS = ["", "P", "G"]
 YN_OPTIONS = ["", "Yes", "No"]
 
@@ -632,7 +632,7 @@ elif page == "Add Facility":
         yakap = b1.selectbox(YAKAP_COL, YN_OPTIONS)
         gamot = b2.selectbox(GAMOT_COL, YN_OPTIONS)
         ownership = b3.selectbox(OWN_COL, OWN_OPTIONS, help="P = Private, G = Government")
-        status = st.selectbox(STATUS_COL, STATUS_OPTIONS, help="Lagyan ng Dedup kung duplicate ng ibang record")
+        status = st.selectbox(STATUS_COL, STATUS_OPTIONS, help="Lagyan ng Duplicate kung duplicate ng ibang record")
         submitted = st.form_submit_button("Save")
 
     if submitted:
@@ -770,20 +770,20 @@ elif page == "Find Duplicates":
             st.success("No duplicates found.")
         else:
             extra_ids = tmp[tmp.duplicated("_key", keep="first")]["ID"].tolist()
-            already = df[df[STATUS_COL].apply(norm_status) == "Dedup"]["ID"].tolist()
+            already = df[df[STATUS_COL].apply(norm_status) == "Duplicate"]["ID"].tolist()
             st.warning(
                 f"{dups['_key'].nunique()} facility name(s) are duplicated "
                 f"({len(extra_ids)} extra record(s))."
             )
             st.dataframe(dups.drop(columns=["_key"]), hide_index=True)
             st.caption(
-                "Hindi na po binubura ang mga record. Minamarkahan lang sila bilang **Dedup** "
+                "Hindi na po binubura ang mga record. Minamarkahan lang sila bilang **Duplicate** "
                 "dito sa system para makita pa rin sila."
             )
             if already:
-                st.info(f"{len(already)} record(s) are already marked as Dedup.")
-            confirm = st.checkbox("I understand the extra records will be marked as Dedup")
-            if st.button("Mark extra duplicates as Dedup", disabled=not confirm):
+                st.info(f"{len(already)} record(s) are already marked as Duplicate.")
+            confirm = st.checkbox("I understand the extra records will be marked as Duplicate")
+            if st.button("Mark extra duplicates as Duplicate", disabled=not confirm):
                 marked = 0
                 for fid in extra_ids:
                     row = df[df["ID"] == fid].iloc[0]
@@ -791,11 +791,11 @@ elif page == "Find Duplicates":
                         int(fid), row["Province"], row["Name of Facility"],
                         row["Facility Type"], row["Address"], row["Name of EMR"],
                         row.get(YAKAP_COL, ""), row.get(GAMOT_COL, ""), row.get(OWN_COL, ""),
-                        "Dedup",
+                        "Duplicate",
                     )
                     marked += 1
                 st.success(
-                    f"Marked {marked} duplicate record(s) as Dedup. Nandiyan pa rin sila sa system. "
+                    f"Marked {marked} duplicate record(s) as Duplicate. Nandiyan pa rin sila sa system. "
                     "Refresh the page to update the list."
                 )
 
@@ -968,10 +968,10 @@ elif page == "Import / Export":
                 status = "OK"
                 seen.add(key)
             # Auto-tag duplicates: anything already seen keeps its row but is
-            # marked Dedup in the Duplicate Status column.
+            # marked Duplicate in the Status column.
             auto_status = norm_status(r[STATUS_COL])
             if not auto_status and status in ("Repeated in file", "Already in database"):
-                auto_status = "Dedup"
+                auto_status = "Duplicate"
             records.append({
                 "File row": int(r["File row"]),
                 "Province": province or "",
@@ -999,7 +999,7 @@ elif page == "Import / Export":
         s1, s2, s3, s4, s5 = st.columns(5)
         s1.metric("New", n_ok, help="Idadagdag bilang bagong record")
         s2.metric("Already in database", n_exist)
-        s3.metric("Duplicates to add", n_rep, help="Idadagdag din, ngunit nakatatakan na Dedup")
+        s3.metric("Duplicates to add", n_rep, help="Idadagdag din, ngunit nakatatakan na Duplicate")
         s4.metric("Province not set", n_prov)
         s5.metric("Missing name", n_name)
 
@@ -1023,11 +1023,11 @@ elif page == "Import / Export":
                     )
                     added_dup += 1
                 elif rec["Status"] == "Repeated in file":
-                    # Keep the repeated row too, tagged as Dedup.
+                    # Keep the repeated row too, tagged as Duplicate.
                     create_facility(
                         rec["Province"], rec["Name of Facility"], rec["Facility Type"],
                         rec["Address"], rec["Name of EMR"],
-                        rec[YAKAP_COL], rec[GAMOT_COL], rec[OWN_COL], "Dedup",
+                        rec[YAKAP_COL], rec[GAMOT_COL], rec[OWN_COL], "Duplicate",
                     )
                 elif rec["Status"] == "Already in database" and update_mode:
                     fid, o_name, o_t, o_a, o_e, o_y, o_g, o_o, o_s = existing_map[
@@ -1046,7 +1046,7 @@ elif page == "Import / Export":
                     updated += 1
             msg = f"Added {n_ok} new facilities."
             if n_dup:
-                msg += f" Added {n_dup} duplicate(s) marked as Dedup."
+                msg += f" Added {n_dup} duplicate(s) marked as Duplicate."
             if update_mode:
                 msg += f" Updated {updated} existing."
             reasons = {

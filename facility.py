@@ -62,7 +62,7 @@ def norm_yn(value):
     return ""
 
 
-NHFR_SHEETS = [0, 1]   # how many sheets to read from the NHFR file (1 = first only)
+NHFR_SKIP_SHEETS = ["summary"]   # sheets to ignore; every other sheet is read
 
 
 def nhfr_address(street, brgy, mun, prov):
@@ -85,24 +85,36 @@ def nhfr_index(file_bytes):
     """Build an index of the NHFR list: key -> list of address strings."""
     book = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None, dtype=str)
     idx = {}
-    for sheet in list(book.keys())[:NHFR_SHEETS]:
-        raw = book[sheet].fillna("")
-        cols = {c.strip().lower(): c for c in raw.columns}
-        if "facility name" not in cols:
+    for sheet, raw in book.items():
+        if sheet.strip().lower() in NHFR_SKIP_SHEETS:
             continue
-        for _, r in raw.iterrows():
-            nm = clean_text(r.get(cols.get("facility name"), ""))
-            pv = clean_text(r.get(cols.get("province name/highly urbanized city name"), ""))
-            st_ = clean_text(r.get(cols.get("street name and #"), ""))
-            br = clean_text(r.get(cols.get("barangay name"), ""))
-            mu = clean_text(r.get(cols.get("city/municipality name"), ""))
+        raw = raw.fillna("")
+        cols = {str(c).strip().lower(): c for c in raw.columns}
+        name_c = cols.get("facility name")
+        if name_c is None:
+            continue          # not a province sheet (e.g. a cover/notes page)
+
+        def cell(row, key, fallback=""):
+            col = cols.get(key)
+            if col is None:
+                return fallback
+            v = row.get(col, "")
+            return v if isinstance(v, str) else str(v or "")
+
+        for _, row in raw.iterrows():
+            nm = clean_text(cell(row, "facility name"))
             if not nm:
                 continue
-            addr = nhfr_address(st_, br, mu, pv)
+            pv = cell(row, "province name/highly urbanized city name") or sheet
+            addr = nhfr_address(
+                cell(row, "street name and #"),
+                cell(row, "barangay name"),
+                cell(row, "city/municipality name"),
+                pv,
+            )
             if not addr:
                 continue
-            k = (norm(nm), norm(pv))
-            idx.setdefault(k, []).append(addr)
+            idx.setdefault((norm(nm), norm(pv)), []).append(addr)
     return idx
 
 

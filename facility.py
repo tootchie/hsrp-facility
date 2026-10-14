@@ -17,6 +17,7 @@ Optional logos (put in the SAME folder as this file):
 import base64
 import html
 import io
+import os
 import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -63,6 +64,79 @@ def norm_yn(value):
 
 
 NHFR_SKIP_SHEETS = ["summary"]   # sheets to ignore; every other sheet is read
+
+
+NHFR_FILE = BASE_DIR / "NHFR_Facility.xlsx"
+
+NHFR_URL = (
+    "https://raw.githubusercontent.com/tootchie/hsrp-facility/main/"
+    "NHFR_Facility.xlsx"
+)
+
+
+@st.cache_data(show_spinner=False)
+def nhfr_index(file_bytes):
+    """Read the NHFR master list: one row per facility, with its address."""
+    book = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None, dtype=str)
+    rows = []
+    for sheet, raw in book.items():
+        if sheet.strip().lower() in NHFR_SKIP_SHEETS:
+            continue
+        raw = raw.fillna("")
+        cols = {str(c).strip().lower(): c for c in raw.columns}
+        name_c = cols.get("facility name")
+        if name_c is None:
+            continue
+
+        def cell(row, key):
+            col = cols.get(key)
+            if col is None:
+                return ""
+            v = row.get(col, "")
+            return v if isinstance(v, str) else str(v or "")
+
+        for _, row in raw.iterrows():
+            nm = clean_text(cell(row, "facility name"))
+            if not nm:
+                continue
+            prov = clean_text(cell(row, "province name/highly urbanized city name")) or sheet
+            rows.append({
+                "Code": clean_text(cell(row, "facility code")),
+                "Province": prov,
+                "Name of Facility": nm,
+                "Facility Type": clean_text(cell(row, "health facility type")),
+                "Ownership": clean_text(cell(row, "ownership major classification")),
+                "Address": nhfr_address(
+                    cell(row, "street name and #"),
+                    cell(row, "barangay name"),
+                    cell(row, "city/municipality name"),
+                    prov,
+                ),
+                "NHFR Status": clean_text(cell(row, "health facility status in the database")),
+                "Name of EMR": "",
+                "Status": "",
+            })
+    return rows
+
+
+def seed_nhfr(file_bytes):
+    """Replace the database with the NHFR master list."""
+    rows = nhfr_index(file_bytes)
+    if not rows:
+        return 0
+    with get_conn() as conn:
+        conn.execute("DELETE FROM facilities")
+        conn.executemany(
+            "INSERT INTO facilities (code, province, name, facility_type, address, "
+            "emr, yakap, gamot, ownership, dup_status, nhfr_status) "
+            "VALUES (?, ?, ?, ?, ?, ?, '', '', ?, '', ?)",
+            [
+                (r["Code"], r["Province"], r["Name of Facility"], r["Facility Type"],
+                 r["Address"], r["Name of EMR"], r["Ownership"], r["NHFR Status"])
+                for r in rows
+            ],
+        )
+    return len(rows)
 
 
 def nhfr_address(street, brgy, mun, prov):
@@ -116,6 +190,19 @@ def nhfr_index(file_bytes):
                 continue
             idx.setdefault((norm(nm), norm(pv)), []).append(addr)
     return idx
+
+
+EMR_OPTIONS = ["", "With EMR", "Without EMR"]
+EMR_SOURCE = "Letter of Intent"
+
+
+def norm_emr(value):
+    v = "" if value is None or (isinstance(value, float) and pd.isna(value)) else str(value).strip().lower()
+    if v in ("with emr", "with", "yes", "y", "emr", "has emr"):
+        return "With EMR"
+    if v in ("without emr", "without", "no", "n", "none", "no emr", "non emr", "non-emr"):
+        return "Without EMR"
+    return ""
 
 
 def norm_status(value):
@@ -190,7 +277,9 @@ def init_db():
                 yakap TEXT,
                 gamot TEXT,
                 ownership TEXT,
-                dup_status TEXT
+                dup_status TEXT,
+                code TEXT,
+                nhfr_status TEXT
             )
             """
         )
@@ -203,15 +292,19 @@ def init_db():
             conn.execute("ALTER TABLE facilities ADD COLUMN ownership TEXT")
         if "dup_status" not in cols:
             conn.execute("ALTER TABLE facilities ADD COLUMN dup_status TEXT")
+        if "code" not in cols:
+            conn.execute("ALTER TABLE facilities ADD COLUMN code TEXT")
+        if "nhfr_status" not in cols:
+            conn.execute("ALTER TABLE facilities ADD COLUMN nhfr_status TEXT")
         conn.execute("UPDATE facilities SET dup_status='Duplicate' WHERE LOWER(dup_status)='dedup'")
 
 
-def create_facility(province, name, ftype, address, emr, yakap="", gamot="", ownership="", dup_status=""):
+def create_facility(province, name, ftype, address, emr, yakap="", gamot="", ownership="", dup_status="", code="", nhfr_status=""):
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO facilities (province, name, facility_type, address, emr, yakap, gamot, ownership, dup_status) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (province, name, ftype, address, emr, yakap, gamot, ownership, dup_status),
+            "INSERT INTO facilities (province, name, facility_type, address, emr, yakap, gamot, ownership, dup_status, code, nhfr_status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (province, name, ftype, address, emr, yakap, gamot, ownership, dup_status, code, nhfr_status),
         )
 
 
@@ -223,18 +316,20 @@ def read_facilities():
             f"COALESCE(yakap, '') AS '{YAKAP_COL}', "
             f"COALESCE(gamot, '') AS '{GAMOT_COL}', "
             f"COALESCE(ownership, '') AS '{OWN_COL}', "
-            f"COALESCE(dup_status, '') AS '{STATUS_COL}' "
+            f"COALESCE(dup_status, '') AS '{STATUS_COL}', "
+            "COALESCE(code, '') AS 'Facility Code', "
+            "COALESCE(nhfr_status, '') AS 'NHFR Status' "
             "FROM facilities ORDER BY province, name",
             conn,
         )
 
 
-def update_facility(fid, province, name, ftype, address, emr, yakap="", gamot="", ownership="", dup_status=""):
+def update_facility(fid, province, name, ftype, address, emr, yakap="", gamot="", ownership="", dup_status="", code="", nhfr_status=""):
     with get_conn() as conn:
         conn.execute(
             "UPDATE facilities SET province=?, name=?, facility_type=?, "
-            "address=?, emr=?, yakap=?, gamot=?, ownership=?, dup_status=? WHERE id=?",
-            (province, name, ftype, address, emr, yakap, gamot, ownership, dup_status, fid),
+            "address=?, emr=?, yakap=?, gamot=?, ownership=?, dup_status=?, code=?, nhfr_status=? WHERE id=?",
+            (province, name, ftype, address, emr, yakap, gamot, ownership, dup_status, code, nhfr_status, fid),
         )
 
 
@@ -647,7 +742,7 @@ with st.sidebar:
         st.rerun()
 
 page = st.sidebar.radio(
-    "Menu", ["Dashboard", "View / Search", "Add Facility", "Edit / Delete", "Find Duplicates", "Fill Addresses", "Import / Export"]
+    "Menu", ["Dashboard", "View / Search", "Add Facility", "Edit / Delete", "Find Duplicates", "NHFR / EMR Match", "Import / Export"]
 )
 
 render_header(page)
@@ -859,103 +954,182 @@ elif page == "Find Duplicates":
                     "Refresh the page to update the list."
                 )
 
-# ----- FILL MISSING ADDRESSES FROM NHFR -----
-elif page == "Fill Addresses":
-    st.subheader("Fill Missing Addresses from the NHFR List")
+# ----- NHFR MASTER LIST / EMR MATCH -----
+elif page == "NHFR / EMR Match":
+    st.subheader("NHFR Master List and EMR Matching")
     st.caption(
-        "The NHFR facility list is used as a reference to fill in blank addresses. "
-        "Records that already have an address are not changed."
+        "The NHFR facility list is the database. Upload the facility file (Letter of Intent) "
+        "to mark each facility as With EMR or Without EMR."
     )
 
-    up = st.file_uploader("NHFR file (.xlsx)", type=["xlsx"])
-    if up is None:
-        st.info("Upload the NHFR file (FACILITY_LIST) to begin.")
+    # ---- Step 1: load the NHFR master list ----
+    st.markdown("**Step 1 - NHFR master list**")
+    src = st.radio(
+        "Where is the NHFR file?",
+        ["Upload it now", "Use the file already in the repository"],
+        horizontal=True,
+    )
+    nhfr_bytes = None
+    if src == "Upload it now":
+        up = st.file_uploader("NHFR file (.xlsx)", type=["xlsx"])
+        if up is not None:
+            nhfr_bytes = up.getvalue()
     else:
-        try:
-            index = nhfr_index(up.getvalue())
-        except Exception as e:
-            st.error(f"Could not read the file: {e}")
-            index = None
+        if os.path.exists(NHFR_FILE):
+            with open(NHFR_FILE, "rb") as fh:
+                nhfr_bytes = fh.read()
+        else:
+            st.warning(
+                f"'{NHFR_FILE.name}' is not in the app folder. Upload the file instead, "
+                "or place it beside facility.py."
+            )
 
-        if index:
-            st.success(f"Loaded {sum(len(v) for v in index.values())} record(s) from the NHFR list.")
+    if nhfr_bytes is None:
+        st.info("Load the NHFR file to begin.")
+    else:
+        rows = nhfr_index(nhfr_bytes)
+        existing = read_facilities()
+        st.success(
+            f"NHFR list loaded: {len(rows)} facility record(s). "
+            f"Currently in the database: {len(existing)}."
+        )
+        if st.button(f"Load {len(rows)} NHFR facilities into the database", type="primary"):
+            n = seed_nhfr(nhfr_bytes)
+            st.session_state["nhfr_loaded"] = n
+            st.rerun()
 
-            blanks = df[
-                df["Address"].apply(lambda x: not clean_text(x))
-            ].copy()
+        loaded = st.session_state.pop("nhfr_loaded", None)
+        if loaded:
+            st.success(f"Database replaced with {loaded} NHFR facility record(s).")
 
-            if blanks.empty:
-                st.info("No facility has a blank address. Nothing to fill.")
-            else:
-                rows = []
-                for _, r in blanks.iterrows():
-                    k = (norm(r["Name of Facility"]), norm(r["Province"]))
-                    hits = index.get(k, [])
-                    hits = list(dict.fromkeys(hits))
-                    if len(hits) == 1:
-                        verdict = "Ready"
-                        found = hits[0]
-                    elif len(hits) > 1:
-                        verdict = "For Review"
-                        found = hits[0]
-                    else:
-                        verdict = "Not found"
-                        found = ""
-                    rows.append({
-                        "ID": int(r["ID"]),
-                        "Name of Facility": r["Name of Facility"],
-                        "Province": r["Province"],
-                        "Result": verdict,
-                        "Address to fill": found,
-                    })
-
-                prev = pd.DataFrame(rows)
-                n_ready = int((prev["Result"] == "Ready").sum())
-                n_review = int((prev["Result"] == "For Review").sum())
-                n_missing = int((prev["Result"] == "Not found").sum())
-
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Blank addresses", len(prev))
-                c2.metric("Ready to fill", n_ready)
-                c3.metric("For review", n_review)
-                c4.metric("Not found in NHFR", n_missing)
-
-                st.caption(
-                    "**Ready** rows are copied into the Address field. **For Review** rows "
-                    "matched more than one NHFR entry - check them before continuing."
-                )
-                st.dataframe(prev, hide_index=True)
-
-                with st.expander("Also fill the 'For Review' rows (only the first match is used):"):
-                    use_review = st.checkbox("Also fill the For Review rows")
-
-
-
-                to_fill = prev[prev["Result"] == "Ready"]
-                if use_review:
-                    to_fill = prev[prev["Result"].isin(["Ready", "For Review"])]
-
-                if st.button(f"Fill {len(to_fill)} address(es)", disabled=to_fill.empty):
-                    for _, r in to_fill.iterrows():
-                        src = df[df["ID"] == r["ID"]].iloc[0]
-                        update_facility(
-                            int(r["ID"]), src["Province"], src["Name of Facility"],
-                            src["Facility Type"], r["Address to fill"], src["Name of EMR"],
-                            src.get(YAKAP_COL, ""), src.get(GAMOT_COL, ""),
-                            src.get(OWN_COL, ""), src.get(STATUS_COL, ""),
-                        )
-                    st.success(
-                        f"Filled {len(to_fill)} address(es) from the NHFR list. "
-                        "Open the Dashboard to see them."
-                    )
-                    st.session_state["nhfr_report"] = prev[prev["Result"] == "Not found"]
-                    st.rerun()
-
-    not_found = st.session_state.get("nhfr_report")
-    if not_found is not None and not not_found.empty:
+        # ---- Step 2: match the uploaded facility file ----
         st.markdown("---")
-        st.markdown("**Not found in the NHFR list**")
-        st.dataframe(not_found, hide_index=True)
+        st.markdown("**Step 2 - Mark With EMR / Without EMR**")
+        st.caption(
+            "Upload the facility file (Letter of Intent). Rows that match an NHFR facility are "
+            "marked 'With EMR'. Facilities that are not in the NHFR list are still added, also "
+            "marked 'With EMR', so the database keeps everything."
+        )
+        sub = st.file_uploader("Facility file (.csv or .xlsx)", type=["csv", "xlsx"])
+
+        if sub is not None:
+            try:
+                if sub.name.lower().endswith(".csv"):
+                    raw = pd.read_csv(sub, dtype=str).fillna("")
+                else:
+                    raw = pd.read_excel(sub, dtype=str).fillna("")
+            except Exception as e:
+                st.error(f"Could not read the file: {e}")
+                raw = None
+
+            if raw is not None and not raw.empty:
+                cols = list(raw.columns)
+                NONE = "(none)"
+                options = [NONE] + cols
+
+                def guess(keys, exclude=()):
+                    for col in cols:
+                        low = col.lower()
+                        if any(k in low for k in keys) and not any(x in low for x in exclude):
+                            return col
+                    return NONE
+
+                m = st.columns(2)
+                name_col = m[0].selectbox("Facility name column", options, index=options.index(guess(("name", "facil"))))
+                prov_col = m[1].selectbox("Province column", options, index=options.index(guess(("prov",))))
+
+                keys = set()
+                for _, r in raw.iterrows():
+                    nm = clean_text(r.get(name_col, ""))
+                    if not nm:
+                        continue
+                    pv = clean_text(r.get(prov_col, "")) if prov_col != NONE else ""
+                    keys.add((norm(nm), norm(pv)))
+                    if pv:
+                        keys.add((norm(nm), ""))
+
+                db = read_facilities()
+                if db.empty:
+                    st.warning("The database is empty. Load the NHFR list first (Step 1).")
+                else:
+                    matched = db.apply(
+                        lambda r: (norm(r["Name of Facility"]), norm(r["Province"])) in keys
+                        or (norm(r["Name of Facility"]), "") in keys,
+                        axis=1,
+                    )
+                    out = db.copy()
+                    out["EMR Result"] = ["With EMR" if v else "Without EMR" for v in matched]
+
+                    # Facilities in the subject file that are NOT in the NHFR list.
+                    # They are still kept, also marked With EMR.
+                    extra = pd.DataFrame(
+                        [
+                            {
+                                "ID": 0,
+                                "Province": clean_text(r.get(prov_col, "")) if prov_col != NONE else "",
+                                "Name of Facility": clean_text(r.get(name_col, "")),
+                                "Facility Type": "",
+                                "Address": "",
+                                "Facility Code": "",
+                                "NHFR Status": "",
+                                "EMR Result": "With EMR",
+                            }
+                            for _, r in raw.iterrows()
+                            if clean_text(r.get(name_col, ""))
+                            and (norm(clean_text(r.get(name_col, ""))),
+                                 norm(clean_text(r.get(prov_col, "")) if prov_col != NONE else "")) not in keys
+                        ]
+                    ).drop_duplicates(subset=["Province", "Name of Facility"])
+
+                    n_with = int((out["EMR Result"] == "With EMR").sum())
+                    n_without = int((out["EMR Result"] == "Without EMR").sum())
+
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("NHFR facilities", len(out))
+                    c2.metric("With EMR", n_with)
+                    c3.metric("Without EMR", n_without)
+                    c4.metric("Not in NHFR (added)", len(extra))
+
+                    show = out[["Facility Code", "Province", "Name of Facility", "Address", "EMR Result"]]
+                    st.dataframe(show, hide_index=True)
+
+                    if not extra.empty:
+                        with st.expander(f"Not in the NHFR list - will be added ({len(extra)} row(s))"):
+                            st.dataframe(
+                                extra[["Province", "Name of Facility", "EMR Result"]],
+                                hide_index=True,
+                            )
+
+                    final = pd.concat(
+                        [show, extra[["Facility Code", "Province", "Name of Facility", "Address", "EMR Result"]]],
+                        ignore_index=True,
+                    )
+                    st.download_button(
+                        "Download the marked list (CSV)",
+                        final.to_csv(index=False).encode("utf-8"),
+                        "nhfr_emr_marked.csv",
+                        "text/csv",
+                    )
+
+                    if st.button(f"Save {len(final)} rows with the EMR marking", type="primary"):
+                        for _, r in out.iterrows():
+                            update_facility(
+                                int(r["ID"]), r["Province"], r["Name of Facility"],
+                                r["Facility Type"], r["Address"], r["EMR Result"],
+                                r.get(YAKAP_COL, ""), r.get(GAMOT_COL, ""),
+                                r.get(OWN_COL, ""), r.get(STATUS_COL, ""),
+                                r.get("Facility Code", ""), r.get("NHFR Status", ""),
+                            )
+                        for _, r in extra.iterrows():
+                            create_facility(
+                                r["Province"], r["Name of Facility"], "", "", "With EMR",
+                                "", "", "", "", "", "",
+                            )
+                        st.success(
+                            f"Saved. {n_with} With EMR, {n_without} Without EMR, "
+                            f"and {len(extra)} facility(ies) added from the Letter of Intent list."
+                        )
+                        st.rerun()
 
 # ----- IMPORT / EXPORT -----
 elif page == "Import / Export":

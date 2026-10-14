@@ -83,10 +83,10 @@ def nhfr_address(street, brgy, mun, prov):
 @st.cache_data(show_spinner=False)
 def nhfr_index(file_bytes):
     """Build an index of the NHFR list: key -> list of address strings."""
-    wb = pd.ExcelFile(io.BytesIO(file_bytes))
+    book = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None, dtype=str)
     idx = {}
-    for sheet in wb.sheet_names[:NHFR_SHEETS]:
-        raw = wb.parse(sheet, dtype=str).fillna("")
+    for sheet in list(book.keys())[:NHFR_SHEETS]:
+        raw = book[sheet].fillna("")
         cols = {c.strip().lower(): c for c in raw.columns}
         if "facility name" not in cols:
             continue

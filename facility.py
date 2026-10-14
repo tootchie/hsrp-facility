@@ -74,7 +74,6 @@ NHFR_URL = (
 )
 
 
-@st.cache_data(show_spinner=False)
 def nhfr_index(file_bytes):
     """Read the NHFR master list. Every row is kept, including repeats."""
     book = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None, dtype=str)
@@ -125,6 +124,22 @@ def nhfr_index(file_bytes):
     return records
 
 
+NHFR_KEYS = ["Code", "Province", "Name of Facility", "Facility Type",
+             "Address", "Ownership", "NHFR Status"]
+
+
+def _nhfr_value(rec, index):
+    """Read one field whether the record is a dict, a Series, a list or a tuple."""
+    if isinstance(rec, dict):
+        return str(rec.get(NHFR_KEYS[index], "") or "")
+    try:
+        if hasattr(rec, "iloc"):
+            return str(rec.iloc[index] or "")
+        return str(rec[index] or "")
+    except Exception:
+        return ""
+
+
 def seed_nhfr(file_bytes):
     """Replace the database with the NHFR master list."""
     rows = nhfr_index(file_bytes)
@@ -134,17 +149,17 @@ def seed_nhfr(file_bytes):
         conn.execute("DELETE FROM facilities")
         data = [
             (
-                str(r.get("Code", "")),
-                str(r.get("Province", "")),
-                str(r.get("Name of Facility", "")),
-                str(r.get("Facility Type", "")),
-                str(r.get("Address", "")),
+                _nhfr_value(r, 0),
+                _nhfr_value(r, 1),
+                _nhfr_value(r, 2),
+                _nhfr_value(r, 3),
+                _nhfr_value(r, 4),
                 "",
                 "",
                 "",
-                str(r.get("Ownership", "")),
+                _nhfr_value(r, 5),
                 "",
-                str(r.get("NHFR Status", "")),
+                _nhfr_value(r, 6),
             )
             for r in rows
         ]

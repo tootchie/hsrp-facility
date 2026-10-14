@@ -63,6 +63,8 @@ def norm_yn(value):
 
 def norm_status(value):
     v = "" if value is None or (isinstance(value, float) and pd.isna(value)) else str(value).strip().lower()
+    if v in ("dedup", "duplicate"):
+        return "Duplicate"
     for opt in STATUS_OPTIONS:
         if opt and v == opt.lower():
             return opt
@@ -144,6 +146,7 @@ def init_db():
             conn.execute("ALTER TABLE facilities ADD COLUMN ownership TEXT")
         if "dup_status" not in cols:
             conn.execute("ALTER TABLE facilities ADD COLUMN dup_status TEXT")
+        conn.execute("UPDATE facilities SET dup_status='Duplicate' WHERE LOWER(dup_status)='dedup'")
 
 
 def create_facility(province, name, ftype, address, emr, yakap="", gamot="", ownership="", dup_status=""):
@@ -863,7 +866,7 @@ elif page == "Import / Export":
         yakap_col = m[5].selectbox(YAKAP_COL, options, index=options.index(guess(("yakap",))))
         gamot_col = m[6].selectbox(GAMOT_COL, options, index=options.index(guess(("package", "provider"))))
         own_col = m[7].selectbox(OWN_COL, options, index=options.index(guess(("ownership", "owner"))))
-        status_col = m[8].selectbox(STATUS_COL, options, index=options.index(guess(("status", "duplicate"))))
+        status_col = m[8].selectbox(STATUS_COL, options, index=options.index(guess(("status", "duplicate", "dedup"))))
 
         # Step 2: province
         st.markdown("**Step 2 - Province**")

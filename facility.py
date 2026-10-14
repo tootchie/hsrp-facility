@@ -16,6 +16,7 @@ Optional logos (put in the SAME folder as this file):
 
 import base64
 import html
+import io
 import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -59,6 +60,50 @@ def norm_yn(value):
     if v in ("no", "n", "false", "0", "not accredited"):
         return "No"
     return ""
+
+
+NHFR_SHEETS = [0, 1]   # how many sheets to read from the NHFR file (1 = first only)
+
+
+def nhfr_address(street, brgy, mun, prov):
+    """Join the NHFR address parts, skipping blanks. Never returns 'N/A'."""
+    parts = []
+    for v in (street, brgy, mun, prov):
+        t = clean_text(v)
+        if t and t.lower() not in ("n/a", "na", "none", "-"):
+            parts.append(t)
+    # de-duplicate while keeping the order (a street cell may already hold the full address)
+    seen = []
+    for p in parts:
+        if p.lower() not in [x.lower() for x in seen]:
+            seen.append(p)
+    return ", ".join(seen)
+
+
+@st.cache_data(show_spinner=False)
+def nhfr_index(file_bytes):
+    """Build an index of the NHFR list: key -> list of address strings."""
+    wb = pd.ExcelFile(io.BytesIO(file_bytes))
+    idx = {}
+    for sheet in wb.sheet_names[:NHFR_SHEETS]:
+        raw = wb.parse(sheet, dtype=str).fillna("")
+        cols = {c.strip().lower(): c for c in raw.columns}
+        if "facility name" not in cols:
+            continue
+        for _, r in raw.iterrows():
+            nm = clean_text(r.get(cols.get("facility name"), ""))
+            pv = clean_text(r.get(cols.get("province name/highly urbanized city name"), ""))
+            st_ = clean_text(r.get(cols.get("street name and #"), ""))
+            br = clean_text(r.get(cols.get("barangay name"), ""))
+            mu = clean_text(r.get(cols.get("city/municipality name"), ""))
+            if not nm:
+                continue
+            addr = nhfr_address(st_, br, mu, pv)
+            if not addr:
+                continue
+            k = (norm(nm), norm(pv))
+            idx.setdefault(k, []).append(addr)
+    return idx
 
 
 def norm_status(value):
@@ -590,7 +635,7 @@ with st.sidebar:
         st.rerun()
 
 page = st.sidebar.radio(
-    "Menu", ["Dashboard", "View / Search", "Add Facility", "Edit / Delete", "Find Duplicates", "Import / Export"]
+    "Menu", ["Dashboard", "View / Search", "Add Facility", "Edit / Delete", "Find Duplicates", "Fill Addresses", "Import / Export"]
 )
 
 render_header(page)
@@ -801,6 +846,102 @@ elif page == "Find Duplicates":
                     f"Marked {marked} duplicate record(s) as Duplicate. Nandiyan pa rin sila sa system. "
                     "Refresh the page to update the list."
                 )
+
+# ----- FILL MISSING ADDRESSES FROM NHFR -----
+elif page == "Fill Addresses":
+    st.subheader("Fill Missing Addresses from the NHFR List")
+    st.caption(
+        "Gagamitin ang NHFR facility list bilang reference para punan ang blangkong Address. "
+        "Hindi binabago ang mga record na may address na."
+    )
+
+    up = st.file_uploader("NHFR file (.xlsx)", type=["xlsx"])
+    if up is None:
+        st.info("I-upload ang NHFR file (FACILITY_LIST) para magsimula.")
+    else:
+        try:
+            index = nhfr_index(up.getvalue())
+        except Exception as e:
+            st.error(f"Hindi mabasa ang file: {e}")
+            index = None
+
+        if index:
+            st.success(f"Nabasa ang {sum(len(v) for v in index.values())} record(s) mula sa NHFR.")
+
+            blanks = df[
+                df["Address"].apply(lambda x: not clean_text(x))
+            ].copy()
+
+            if blanks.empty:
+                st.info("Walang facility na blangkong ang address. Wala nang pupunan.")
+            else:
+                rows = []
+                for _, r in blanks.iterrows():
+                    k = (norm(r["Name of Facility"]), norm(r["Province"]))
+                    hits = index.get(k, [])
+                    hits = list(dict.fromkeys(hits))
+                    if len(hits) == 1:
+                        verdict = "Ready"
+                        found = hits[0]
+                    elif len(hits) > 1:
+                        verdict = "For Review"
+                        found = hits[0]
+                    else:
+                        verdict = "Not found"
+                        found = ""
+                    rows.append({
+                        "ID": int(r["ID"]),
+                        "Name of Facility": r["Name of Facility"],
+                        "Province": r["Province"],
+                        "Result": verdict,
+                        "Address to fill": found,
+                    })
+
+                prev = pd.DataFrame(rows)
+                n_ready = int((prev["Result"] == "Ready").sum())
+                n_review = int((prev["Result"] == "For Review").sum())
+                n_missing = int((prev["Result"] == "Not found").sum())
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Blank addresses", len(prev))
+                c2.metric("Ready to fill", n_ready)
+                c3.metric("For review", n_review)
+                c4.metric("Not found in NHFR", n_missing)
+
+                st.caption(
+                    "Ang **Ready** ay isasalin sa Address. Ang **For Review** ay may "
+                    "higit sa isang tugma sa NHFR - pakitingnan bago ituloy."
+                )
+                st.dataframe(prev, hide_index=True)
+
+                with st.expander("Also fill the 'For Review' rows (unang tugma lang ang gagamitin)"):
+                    use_review = st.checkbox("Isama ang For Review rows")
+
+                to_fill = prev[prev["Result"] == "Ready"]
+                if use_review:
+                    to_fill = prev[prev["Result"].isin(["Ready", "For Review"])]
+
+                if st.button(f"Fill {len(to_fill)} address(es)", disabled=to_fill.empty):
+                    for _, r in to_fill.iterrows():
+                        src = df[df["ID"] == r["ID"]].iloc[0]
+                        update_facility(
+                            int(r["ID"]), src["Province"], src["Name of Facility"],
+                            src["Facility Type"], r["Address to fill"], src["Name of EMR"],
+                            src.get(YAKAP_COL, ""), src.get(GAMOT_COL, ""),
+                            src.get(OWN_COL, ""), src.get(STATUS_COL, ""),
+                        )
+                    st.success(
+                        f"Napunan ang {len(to_fill)} address(es) mula sa NHFR. "
+                        "Buksan ang Dashboard para makita."
+                    )
+                    st.session_state["nhfr_report"] = prev[prev["Result"] == "Not found"]
+                    st.rerun()
+
+    not_found = st.session_state.get("nhfr_report")
+    if not_found is not None and not not_found.empty:
+        st.markdown("---")
+        st.markdown("**Hindi natagpuan sa NHFR**")
+        st.dataframe(not_found, hide_index=True)
 
 # ----- IMPORT / EXPORT -----
 elif page == "Import / Export":

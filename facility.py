@@ -76,47 +76,53 @@ NHFR_URL = (
 
 @st.cache_data(show_spinner=False)
 def nhfr_index(file_bytes):
-    """Read the NHFR master list: one row per facility, with its address."""
+    """Read the NHFR master list. Every row is kept, including repeats."""
     book = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None, dtype=str)
-    rows = []
+    records = []
     for sheet, raw in book.items():
-        if sheet.strip().lower() in NHFR_SKIP_SHEETS:
+        if str(sheet).strip().lower() in NHFR_SKIP_SHEETS:
             continue
         raw = raw.fillna("")
-        cols = {str(c).strip().lower(): c for c in raw.columns}
-        name_c = cols.get("facility name")
-        if name_c is None:
+        headers = [str(c).strip().lower() for c in raw.columns]
+
+        def col_of(key):
+            return headers.index(key) if key in headers else -1
+
+        i_code = col_of("facility code")
+        i_name = col_of("facility name")
+        i_type = col_of("health facility type")
+        i_own = col_of("ownership major classification")
+        i_street = col_of("street name and #")
+        i_brgy = col_of("barangay name")
+        i_mun = col_of("city/municipality name")
+        i_prov = col_of("province name/highly urbanized city name")
+        i_stat = col_of("health facility status in the database")
+        if i_name < 0:
             continue
 
-        def cell(row, key):
-            col = cols.get(key)
-            if col is None:
-                return ""
-            v = row.get(col, "")
-            return v if isinstance(v, str) else str(v or "")
+        for values in raw.itertuples(index=False, name=None):
+            def at(i):
+                if i < 0 or i >= len(values):
+                    return ""
+                v = values[i]
+                if v is None or (isinstance(v, float) and pd.isna(v)):
+                    return ""
+                return str(v).strip()
 
-        for _, row in raw.iterrows():
-            nm = clean_text(cell(row, "facility name"))
+            nm = at(i_name)
             if not nm:
                 continue
-            prov = clean_text(cell(row, "province name/highly urbanized city name")) or sheet
-            rows.append({
-                "Code": clean_text(cell(row, "facility code")),
+            prov = at(i_prov) or str(sheet).strip()
+            records.append({
+                "Code": at(i_code),
                 "Province": prov,
                 "Name of Facility": nm,
-                "Facility Type": clean_text(cell(row, "health facility type")),
-                "Ownership": clean_text(cell(row, "ownership major classification")),
-                "Address": nhfr_address(
-                    cell(row, "street name and #"),
-                    cell(row, "barangay name"),
-                    cell(row, "city/municipality name"),
-                    prov,
-                ),
-                "NHFR Status": clean_text(cell(row, "health facility status in the database")),
-                "Name of EMR": "",
-                "Status": "",
+                "Facility Type": at(i_type),
+                "Ownership": at(i_own),
+                "Address": nhfr_address(at(i_street), at(i_brgy), at(i_mun), prov),
+                "NHFR Status": at(i_stat),
             })
-    return rows
+    return records
 
 
 def seed_nhfr(file_bytes):
@@ -128,17 +134,17 @@ def seed_nhfr(file_bytes):
         conn.execute("DELETE FROM facilities")
         data = [
             (
-                r.get("Code", ""),
-                r.get("Province", ""),
-                r.get("Name of Facility", ""),
-                r.get("Facility Type", ""),
-                r.get("Address", ""),
-                r.get("Name of EMR", ""),
+                str(r.get("Code", "")),
+                str(r.get("Province", "")),
+                str(r.get("Name of Facility", "")),
+                str(r.get("Facility Type", "")),
+                str(r.get("Address", "")),
                 "",
                 "",
-                r.get("Ownership", ""),
                 "",
-                r.get("NHFR Status", ""),
+                str(r.get("Ownership", "")),
+                "",
+                str(r.get("NHFR Status", "")),
             )
             for r in rows
         ]
